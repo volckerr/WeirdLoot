@@ -1111,7 +1111,17 @@ function addon:RefreshResultsTab()
             itemText = string.format("%s x%d", itemText, result.quantity)
         end
         row.name:SetText(itemText)
-        row.winner:SetText(result.winnersText or result.winner or "No winner")
+        if result.winners and #result.winners > 0 and result.winnerDetails and #result.winnerDetails > 0 then
+            local winnerParts = {}
+            for winnerIndex, winnerName in ipairs(result.winners) do
+                local detail = result.winnerDetails[winnerIndex] or {}
+                local colorCode = util:GetClassColorCode(detail.className)
+                winnerParts[#winnerParts + 1] = (colorCode or "|cffffffff") .. winnerName .. "|r"
+            end
+            row.winner:SetText(table.concat(winnerParts, ", "))
+        else
+            row.winner:SetText(result.winnersText or result.winner or "No winner")
+        end
     end)
 
     local selected = self.ui.selectedResult
