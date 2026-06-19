@@ -643,6 +643,14 @@ function addon:ResolveSessionItem(item)
                 end
                 return false
             end, item.quantity or 1, allRollByName)
+            if #winnerCandidates == 0 then
+                for _, winnerName in ipairs(self:SelectWinningRolls(rolls, item.quantity or 1)) do
+                    local winnerCandidate = survivorByName[util:NormalizeKey(winnerName)]
+                    if winnerCandidate then
+                        winnerCandidates[#winnerCandidates + 1] = winnerCandidate
+                    end
+                end
+            end
             for _, winnerCandidate in ipairs(winnerCandidates) do
                 local winnerName = winnerCandidate.name
                 local matchedRoll = allRollByName[util:NormalizeKey(winnerName)]

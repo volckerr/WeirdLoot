@@ -453,6 +453,9 @@ function addon:SetPlayerResponse(itemId, playerName, choice)
     end
     session.responses[itemId][util:NormalizeKey(playerName)] = normalizeResponseChoice(choice)
     self:TriggerCallback("SESSION_UPDATED")
+    if self.RefreshLiveRollCountForItem then
+        self:RefreshLiveRollCountForItem(itemId)
+    end
     return true
 end
 

@@ -377,6 +377,14 @@ local function closePopup(self, f)
     layoutPopups(self)
 end
 
+local function formatRollItemLabel(link, name, quantity)
+    local itemText = link ~= "" and link or name or "Item"
+    if (quantity or 1) > 1 then
+        itemText = string.format("%s x%d", itemText, quantity)
+    end
+    return itemText
+end
+
 -- ---------------------------------------------------------------------------
 -- interest popup
 -- ---------------------------------------------------------------------------
@@ -389,7 +397,7 @@ function addon:ShowInterestPopup(roll)
     roll.choice = nil
     f.icon:SetTexture(roll.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     f.itemLink = roll.link
-    f.name:SetText(roll.link ~= "" and roll.link or roll.name or "Item")
+    f.name:SetText(formatRollItemLabel(roll.link, roll.name, roll.quantity))
     f.sub:SetText("|cffffffffPrio:|r " .. ((roll.prio and roll.prio ~= "") and roll.prio or "BiS > MS > MU > OS > TM"))
     f.okBtn:Hide()
 
@@ -452,11 +460,35 @@ end
 function addon:RefreshInterestPopup(roll)
     local f = roll and roll.popup
     if not f or f.mode ~= "interest" or not roll.owner then return end
+
+    if roll.itemId then
+        local total = 0
+        for _, choice in pairs(self.session.responses[roll.itemId] or {}) do
+            if self:IsResponseActive(choice) then
+                total = total + 1
+            end
+        end
+        f.count:SetText(total > 0 and (total .. " rolling") or "")
+        return
+    end
+
     local total = 0
     for _, r in pairs(roll.registrants) do
         if r.tier and r.tier ~= "pass" then total = total + 1 end
     end
     f.count:SetText(total > 0 and (total .. " rolling") or "")
+end
+
+function addon:RefreshLiveRollCountForItem(itemId)
+    if not itemId or not self.live or not self.live.rolls then
+        return
+    end
+
+    for _, roll in pairs(self.live.rolls) do
+        if roll and not roll.resolved and roll.itemId == itemId then
+            self:RefreshInterestPopup(roll)
+        end
+    end
 end
 
 function addon:CloseInterestPopup(roll)
@@ -501,7 +533,7 @@ function addon:ShowPendingPopup(item, slot)
 
     f.icon:SetTexture(item.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     f.itemLink = link
-    f.name:SetText(link)
+    f.name:SetText(formatRollItemLabel(link, item.name, item.quantity))
     f.sub:SetText("|cffffffffPrio:|r " .. (self:GetLiveItemPrio(item) or "BiS > MS > MU > OS > TM"))
     f.count:Hide()
 
@@ -542,7 +574,7 @@ function addon:ShowResultPopup(roll, winner, winnerRoll, sections, slot)
     f.timer:Hide()
     f.icon:SetTexture(roll.icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     f.itemLink = roll.link
-    f.name:SetText(roll.link ~= "" and roll.link or roll.name or "Item")
+    f.name:SetText(formatRollItemLabel(roll.link, roll.name, roll.quantity))
 
     local myKey = util:NormalizeKey(util:GetPlayerName("player") or "")
     local winKey = winner and winner ~= "" and util:NormalizeKey(winner) or nil
@@ -733,19 +765,30 @@ function addon:StartLiveRoll(item)
     end
 
     if self.session.pendingLinks then self.session.pendingLinks[item.link] = nil end  -- decided: now rolling
-    if item.id then self.session.responses[item.id] = {} end   -- fresh responses for this roll
 
     local rollId = nextRollId(self)
     local prio = self:GetLiveItemPrio(item)
     local roll = {
         id = rollId, itemId = item.id, link = item.link, name = item.name or item.link,
         icon = item.icon, prio = prio, owner = true, registrants = {}, resolved = false,
-        duration = ROLL_DURATION,
+        duration = ROLL_DURATION, quantity = item.quantity or 1,
     }
+
+    if item.id then
+        for playerKey, choice in pairs(self.session.responses[item.id] or {}) do
+            if self:IsResponseActive(choice) then
+                roll.registrants[playerKey] = {
+                    name = playerKey,
+                    tier = choice,
+                }
+            end
+        end
+    end
+
     self.live.rolls[rollId] = roll
 
     self:SendLargeMessage("DROP",
-        { rollId, item.link, item.name or "", item.icon or "", prio or "", tostring(ROLL_DURATION) }, "RAID")
+        { rollId, item.link, item.name or "", item.icon or "", prio or "", tostring(ROLL_DURATION), tostring(item.quantity or 1) }, "RAID")
     self:ShowInterestPopup(roll)
     self:Print("Put " .. (item.name or item.link) .. " up for roll. Press Roll! when ready.")
 end
@@ -759,7 +802,7 @@ function addon:ResolveLiveRoll(rollId)
     -- Registrants' brackets are already in session.responses (RegisterInterest). Resolve
     -- through the SAME engine the batch flow uses: bracket -> named -> spec -> status -> roll.
     local sit = self:LiveRollSessionItem(roll)
-    local item = { id = sit.id, name = sit.name or roll.name, link = sit.link or roll.link, icon = sit.icon or roll.icon, quantity = 1 }
+    local item = { id = sit.id, name = sit.name or roll.name, link = sit.link or roll.link, icon = sit.icon or roll.icon, quantity = sit.quantity or roll.quantity or 1 }
     local record = self:ResolveSessionItem(item)
 
     local winner = (record.winner and record.winner ~= "No winner") and record.winner or nil
@@ -832,7 +875,7 @@ function addon:LiveRollSessionItem(roll)
             return it
         end
     end
-    return { id = roll.itemId or roll.link, name = roll.name, link = roll.link, icon = roll.icon }
+    return { id = roll.itemId or roll.link, name = roll.name, link = roll.link, icon = roll.icon, quantity = roll.quantity or 1 }
 end
 
 
@@ -880,7 +923,13 @@ function addon:RegisterInterest(rollId, name, tier)
     roll.registrants[util:NormalizeKey(name)] = { name = name, tier = tier }
     -- Mirror the pick into the shared response model so the Loot tab reflects it and the
     -- same resolver (BuildRollerList -> ResolveSessionItem) sees these rollers.
-    if roll.itemId then self:SetPlayerResponse(roll.itemId, name, tier) end
+    if roll.itemId then
+        self:SetPlayerResponse(roll.itemId, name, tier)
+        if self:IsAuthorizedLootMaster() then
+            self:BroadcastSelectionState(roll.itemId, name, tier)
+        end
+        self:TriggerCallback("SESSION_UPDATED")
+    end
     self:RefreshInterestPopup(roll)
 end
 
@@ -895,6 +944,7 @@ function addon:OnDropMessage(fields)
         icon = (fields[4] ~= "" and fields[4]) or nil,
         prio = fields[5] or "",
         duration = tonumber(fields[6]) or ROLL_DURATION,
+        quantity = tonumber(fields[7]) or 1,
         owner = false, registrants = {}, resolved = false,
     }
     self.live.rolls[roll.id] = roll
