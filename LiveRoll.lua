@@ -53,6 +53,7 @@ local popupBasePoint, savePopupBasePoint, layoutPopups
 local RESPONSE_ORDER = { bis = 5, ms = 4, mu = 3, os = 2, tm = 1, pass = 0 }
 local RESPONSE_LABELS = { bis = "BiS", ms = "MS", mu = "MU", os = "OS", tm = "TM", pass = "Pass" }
 local ROLL_LINE_LIMIT = 8
+local POPUP_INTEREST_EMPTY_H = 72
 
 local function makeButton(parent, text, width)
     local b = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
@@ -158,9 +159,14 @@ local function refreshPopupRollLines(self, roll)
         end
     end
 
-    local extraRows = lineCount
-    local extraHeight = extraRows > 0 and (8 + (extraRows * 14)) or 0
-    setPopupHeight(f, POPUP_H + extraHeight)
+    if lineCount == 0 then
+        local subHeight = math.ceil(f.sub:GetStringHeight() or 0)
+        local compactHeight = math.max(POPUP_INTEREST_EMPTY_H, 62 + subHeight)
+        setPopupHeight(f, compactHeight)
+    else
+        local extraHeight = 8 + (lineCount * 14)
+        setPopupHeight(f, POPUP_H + extraHeight)
+    end
     layoutPopups(self)
 end
 
