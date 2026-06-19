@@ -12,6 +12,7 @@ Libs\AceComm-3.0\AceComm-3.0.lua
 TradeDeliver.lua
 
 Core.lua
+LootCore.lua
 Util.lua
 Config.lua
 Roster.lua
