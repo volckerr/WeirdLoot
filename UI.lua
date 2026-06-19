@@ -209,8 +209,19 @@ local function createLabel(parent, text, anchor, relativeTo, relativePoint, offs
     return fontString
 end
 
+local function elevateInteractiveFrame(frame, parent, extraLevel)
+    if not frame or not parent or type(parent.GetFrameLevel) ~= "function" then
+        return
+    end
+    if type(parent.GetFrameStrata) == "function" then
+        frame:SetFrameStrata(parent:GetFrameStrata())
+    end
+    frame:SetFrameLevel((parent:GetFrameLevel() or 0) + (extraLevel or 5))
+end
+
 local function createButton(parent, text, width, height)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+    elevateInteractiveFrame(button, parent, 8)
     button:SetWidth(width)
     button:SetHeight(height)
     button:SetText(text)
@@ -231,6 +242,7 @@ end
 
 local function createLootChoiceButton(parent, label, width)
     local button = CreateFrame("Button", nil, parent)
+    elevateInteractiveFrame(button, parent, 8)
     button:SetWidth(width or 28)
     button:SetHeight(18)
     button:SetBackdrop({
@@ -324,6 +336,7 @@ end
 
 local function createBackdropFrame(name, parent)
     local frame = CreateFrame("Frame", name, parent)
+    elevateInteractiveFrame(frame, parent, 1)
     frame:SetBackdrop({
         bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
         edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -358,13 +371,16 @@ local function createTextWindow(name, width, height, titleText, options)
     title:SetFontObject(GameFontHighlightLarge)
 
     local closeButton = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    elevateInteractiveFrame(closeButton, frame, 10)
     closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
 
     local scroll = CreateFrame("ScrollFrame", name .. "Scroll", frame, "UIPanelScrollFrameTemplate")
+    elevateInteractiveFrame(scroll, frame, 6)
     scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -42)
     scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, options.showSaveButton and 44 or 12)
 
     local editBox = CreateFrame("EditBox", name .. "EditBox", scroll)
+    elevateInteractiveFrame(editBox, frame, 7)
     editBox:SetMultiLine(true)
     editBox:SetFontObject(ChatFontNormal)
     editBox:SetWidth(width - 56)
@@ -453,6 +469,7 @@ local function createScrollList(parent, name, rowCount, initializer)
     frame.rows = {}
     for index = 1, rowCount do
         local row = CreateFrame("Button", name .. "Row" .. index, frame)
+        elevateInteractiveFrame(row, frame, 4)
         row:SetHeight(ROW_HEIGHT)
         row:SetPoint("LEFT", 6, 0)
         row:SetPoint("RIGHT", -6, 0)
@@ -494,6 +511,9 @@ function addon:InitializeUI()
     frame:SetWidth(980)
     frame:SetHeight(640)
     frame:SetPoint("CENTER", UIParent, "CENTER", self.db.ui.frame.x or 0, self.db.ui.frame.y or 0)
+    frame:SetFrameStrata("FULLSCREEN_DIALOG")
+    frame:SetToplevel(true)
+    frame:SetFrameLevel(1000)
     frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
@@ -506,18 +526,23 @@ function addon:InitializeUI()
         addon.db.ui.frame.x = x
         addon.db.ui.frame.y = y
     end)
+    frame:SetScript("OnShow", function(selfFrame)
+        selfFrame:Raise()
+    end)
     frame:Hide()
 
     local title = createLabel(frame, "WeirdLoot", "TOPLEFT", frame, "TOPLEFT", 16, -14)
     title:SetFontObject(GameFontHighlightLarge)
 
     local closeButton = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    elevateInteractiveFrame(closeButton, frame, 10)
     closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
 
     local status = createLabel(frame, "", "TOPLEFT", title, "BOTTOMLEFT", 0, -8)
     status:SetWidth(720)
 
     local content = CreateFrame("Frame", nil, frame)
+    elevateInteractiveFrame(content, frame, 4)
     content:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -64)
     content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 44)
 
@@ -844,6 +869,7 @@ end
 
 function addon:BuildLootTab()
     local panel = CreateFrame("Frame", nil, self.ui.content)
+    elevateInteractiveFrame(panel, self.ui.content, 2)
     panel:SetAllPoints(self.ui.content)
     self.ui.panels.loot = panel
 
@@ -1245,6 +1271,7 @@ end
 
 function addon:BuildRaidersTab()
     local panel = CreateFrame("Frame", nil, self.ui.content)
+    elevateInteractiveFrame(panel, self.ui.content, 2)
     panel:SetAllPoints(self.ui.content)
     self.ui.panels.raiders = panel
 
@@ -1305,6 +1332,7 @@ end
 
 function addon:BuildResultsTab()
     local panel = CreateFrame("Frame", nil, self.ui.content)
+    elevateInteractiveFrame(panel, self.ui.content, 2)
     panel:SetAllPoints(self.ui.content)
     self.ui.panels.results = panel
 
@@ -1374,6 +1402,7 @@ function addon:BuildResultsTab()
     detailFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", 0, 0)
 
     local itemHeader = CreateFrame("Button", nil, detailFrame)
+    elevateInteractiveFrame(itemHeader, detailFrame, 6)
     itemHeader:SetPoint("TOPLEFT", detailFrame, "TOPLEFT", 8, -8)
     itemHeader:SetPoint("TOPRIGHT", detailFrame, "TOPRIGHT", -30, -8)
     itemHeader:SetHeight(20)
@@ -1414,10 +1443,12 @@ function addon:BuildResultsTab()
     end)
 
     local scroll = CreateFrame("ScrollFrame", "WeirdLootResultDetailScroll", detailFrame, "UIPanelScrollFrameTemplate")
+    elevateInteractiveFrame(scroll, detailFrame, 6)
     scroll:SetPoint("TOPLEFT", itemHeader, "BOTTOMLEFT", 0, -8)
     scroll:SetPoint("BOTTOMRIGHT", -30, 8)
 
     local editBox = CreateFrame("EditBox", "WeirdLootResultDetailText", scroll)
+    elevateInteractiveFrame(editBox, detailFrame, 7)
     editBox:SetMultiLine(true)
     editBox:SetFontObject(ChatFontNormal)
     editBox:SetWidth(380)
@@ -1427,12 +1458,27 @@ function addon:BuildResultsTab()
     editBox:SetScript("OnEscapePressed", function() editBox:ClearFocus() end)
     scroll:SetScrollChild(editBox)
 
-    local targetButton = CreateFrame("Button", "WeirdLootResultTargetButton", detailFrame, "SecureActionButtonTemplate,UIPanelButtonTemplate")
+    local targetButton = CreateFrame("Button", "WeirdLootResultTargetButton", detailFrame, "UIPanelButtonTemplate")
+    elevateInteractiveFrame(targetButton, detailFrame, 8)
     targetButton:SetWidth(110)
     targetButton:SetHeight(22)
     targetButton:SetPoint("BOTTOMLEFT", detailFrame, "BOTTOMLEFT", 8, 8)
     targetButton:SetText("Target + Whisper")
-    targetButton:SetAttribute("type", "macro")
+    targetButton:SetScript("OnClick", function()
+        local result = addon.ui and addon.ui.selectedResult
+        local whisperName = result and result.winner or nil
+        local itemName = result and (result.itemLink or result.itemName or "your item") or "your item"
+        if not whisperName or whisperName == "" or whisperName == "No winner" then
+            return
+        end
+
+        if type(TargetByName) == "function" then
+            TargetByName(whisperName, true)
+        end
+        if type(SendChatMessage) == "function" then
+            SendChatMessage("You won " .. itemName .. ". Please run to the loot master for trade.", "WHISPER", nil, whisperName)
+        end
+    end)
 
     local tradeButton = createButton(detailFrame, "Trade Winner", 110, 22)
     tradeButton:SetPoint("LEFT", targetButton, "RIGHT", 8, 0)
@@ -1461,6 +1507,7 @@ end
 
 function addon:BuildMasterTab()
     local panel = CreateFrame("Frame", nil, self.ui.content)
+    elevateInteractiveFrame(panel, self.ui.content, 2)
     panel:SetAllPoints(self.ui.content)
     self.ui.panels.master = panel
 
@@ -1723,10 +1770,6 @@ function addon:RefreshResultsTab()
     if self.ui.resultTargetButton then
         if canAct then
             self.ui.resultTargetButton:Enable()
-            local itemName = selected.itemLink or selected.itemName or "your item"
-            local whisperName = selected.winner or ""
-            local macroText = string.format("/target %s\n/w %s You won %s. Please run to the loot master for trade.", string.lower(whisperName), whisperName, itemName)
-            self.ui.resultTargetButton:SetAttribute("macrotext", macroText)
             self.ui.resultTradeButton:Enable()
             self.ui.resultLoadItemButton:Enable()
             self.ui.resultTargetButton:Show()
