@@ -971,7 +971,7 @@ function addon:BuildLootTab()
                 -- SetPlayerResponse routes itself: the ML writes the core (delta syncs out),
                 -- a raider whispers the pick to the ML. The loot tab and the live roll share the
                 -- lot's responses, so a loot-tab pick already reflects on the roll. No separate
-                -- SendInterest/BroadcastSelectionState path (upstream's, deferred with LiveRoll).
+                -- per-pick broadcast path is needed here.
                 if not addon:SetPlayerResponse(row.item.id, playerName, option.key) then
                     return
                 end

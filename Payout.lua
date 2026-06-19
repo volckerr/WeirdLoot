@@ -64,34 +64,6 @@ function addon:OnLotUnlockedPayout(lot, winners)
     end
 end
 
--- Rebuild the owed ledger from the processed results. Called at the end of
--- ProcessLoot (loot-master side; already gated on IsAuthorizedLootMaster). We
--- CLEAR first so re-processing/re-rolling can't stack duplicate owes -- the ledger
--- always mirrors the latest results. result.itemId is a session id, so the real
--- WoW itemId is parsed from the item link.
-function addon:OwePayout(results)
-    if not self.payout then return 0 end
-    self.payout:ClearOwed()
-    local selfKey = addon.util:NormalizeKey(addon.util:GetPlayerName("player") or "")
-    local owed = 0
-    for _, result in ipairs(results or {}) do
-        local itemId = tonumber(string.match(result.itemLink or "", "|Hitem:(%d+)"))
-        if itemId then
-            for _, winner in ipairs(result.winners or {}) do
-                -- skip the ML winning their own loot: already in hand, no self-whisper
-                if winner and winner ~= "No winner" and addon.util:NormalizeKey(winner) ~= selfKey then
-                    self.payout:Owe(winner, itemId, 1, result.itemLink)
-                    owed = owed + 1
-                end
-            end
-        end
-    end
-    if owed > 0 then
-        self:Print(owed .. " winner item(s) ready. Click Start Payout (or /weirdloot payout) to hand them out.")
-    end
-    return owed
-end
-
 local function refreshMaster(self)
     if self.ui and self.ui.masterPanel then self:RefreshMasterTab() end
 end

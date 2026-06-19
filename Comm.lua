@@ -215,38 +215,6 @@ function addon:AutoBroadcastSession(force)
     self:BroadcastDelta(ids)
 end
 
-function addon:BroadcastResults(results)
-    local session = self:GetCurrentSession()
-    for _, result in ipairs(results or {}) do
-        self:SendLargeMessage("RESULT", {
-            session.id or "",
-            result.itemId or "",
-            result.itemName or "",
-            result.itemLink or "",
-            result.itemIcon or result.icon or "",
-            tostring(result.quantity or 1),
-            result.winnersText or result.winner or "",
-            result.summary or "",
-            result.detailText or "",
-        }, "RAID")
-    end
-    self:SendLargeMessage("RESULTS_DONE", { session.id or "" }, "RAID")
-end
-
-function addon:BroadcastSelectionState(itemId, playerName, choice)
-    local session = self:GetCurrentSession()
-    if not self:IsAuthorizedLootMaster() or not session.id then
-        return
-    end
-
-    self:SendLargeMessage("SELECTION_SYNC", {
-        session.id or "",
-        itemId or "",
-        playerName or "",
-        choice or "pass",
-    }, "RAID")
-end
-
 function addon:SendSelection(itemId, choice)
     local session = self:GetCurrentSession()
     if not session.id then
@@ -388,8 +356,6 @@ function addon:HandleCommMessage(sender, logical)
         self:OnDropMessage(fields)
     elseif command == "RSP" then
         self:OnRspMessage(sender, fields)
-    elseif command == "LIVE_SYNC" then
-        self:OnLiveSyncMessage(fields)
     elseif command == "WIN" then
         self:OnWinMessage(fields)
     elseif command == "CANCEL" then
