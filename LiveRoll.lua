@@ -133,8 +133,9 @@ local function setPopupHeight(f, height)
 end
 
 local function getCompactPopupHeight(f)
+    local nameHeight = math.ceil(f.name:GetStringHeight() or 0)
     local subHeight = math.ceil(f.sub:GetStringHeight() or 0)
-    return math.max(POPUP_INTEREST_EMPTY_H, 54 + subHeight)
+    return math.max(POPUP_INTEREST_EMPTY_H, 39 + nameHeight + subHeight)
 end
 
 local function refreshPopupRollLines(self, roll)
