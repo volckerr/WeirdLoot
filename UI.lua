@@ -1028,19 +1028,15 @@ function addon:BuildLootTab()
         row.state:SetWidth(80)
         row.state:SetJustifyH("LEFT")
         row.stateHitbox = CreateFrame("Frame", nil, row)
+        elevateInteractiveFrame(row.stateHitbox, row, 10)
         row.stateHitbox:SetPoint("TOPLEFT", row.state, "TOPLEFT", -4, 4)
         row.stateHitbox:SetPoint("BOTTOMRIGHT", row.state, "BOTTOMRIGHT", 4, -4)
         row.stateHitbox:EnableMouse(true)
         row.stateHitbox:SetScript("OnEnter", function()
+            GameTooltip:Hide()
             if not row.item then
                 return
             end
-
-            local rollers = addon:BuildRollerList(row.item.id) or {}
-
-            table.sort(rollers, function(left, right)
-                return string.lower(left.name or "") < string.lower(right.name or "")
-            end)
 
             GameTooltip:SetOwner(row.stateHitbox, "ANCHOR_NONE")
             GameTooltip:ClearAllPoints()
@@ -1048,20 +1044,31 @@ function addon:BuildLootTab()
             GameTooltip:ClearLines()
             GameTooltip:AddLine("Players Rolling", 1, 0.82, 0)
 
-            if #rollers == 0 then
-                GameTooltip:AddLine("No active rollers", 1, 1, 1)
+            local entries = addon:GetLiveRollEntriesForItem(row.item)
+            if entries and #entries > 0 then
+                for _, entry in ipairs(entries) do
+                    local colorCode = util:GetClassColorCode(entry.className) or "|cffffffff"
+                    GameTooltip:AddLine(string.format("%s%s|r - %d - %s",
+                        colorCode,
+                        entry.name or "Unknown",
+                        entry.roll or 0,
+                        addon:GetResponseLabel(entry.tier)), 1, 1, 1)
+                end
             else
-                for _, roller in ipairs(rollers) do
-                    local classSpec = string.trim((roller.className or "") .. " " .. (roller.specName or ""))
-                    local colorCode = util:GetClassColorCode(roller.className)
-                    local line = colorCode .. (roller.name or "") .. "|r"
-                    local responseLabel = string.upper(roller.responseType or "pass")
-                    if classSpec ~= "" then
-                        line = line .. " " .. colorCode .. "- " .. classSpec .. " - " .. responseLabel .. "|r"
-                    else
-                        line = line .. " " .. colorCode .. "- " .. responseLabel .. "|r"
+                local rollers = addon:BuildRollerList(row.item.id) or {}
+                table.sort(rollers, function(left, right)
+                    return string.lower(left.name or "") < string.lower(right.name or "")
+                end)
+                if #rollers == 0 then
+                    GameTooltip:AddLine("No active rollers", 1, 1, 1)
+                else
+                    for _, roller in ipairs(rollers) do
+                        local colorCode = util:GetClassColorCode(roller.className) or "|cffffffff"
+                        GameTooltip:AddLine(string.format("%s%s|r - %s",
+                            colorCode,
+                            roller.name or "Unknown",
+                            string.upper(roller.responseType or "pass")), 1, 1, 1)
                     end
-                    GameTooltip:AddLine(line, 1, 1, 1)
                 end
             end
 
@@ -2166,7 +2173,7 @@ function addon:RefreshLootTab()
         row.info:SetText(getLootItemInfoText(item))
 
         local rollCount = #(self:BuildRollerList(item.id) or {})
-        row.state:SetText(string.format("%d roller(s)", rollCount))
+        row.state:SetText(string.format("%d rolling", rollCount))
     end)
 end
 
