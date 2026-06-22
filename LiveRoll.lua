@@ -482,14 +482,19 @@ local function applyInterestButtonAvailability(self, f, roll)
         -- its abbreviation. Owned here (not at creation) so the two states never clobber each other.
         btn:SetMotionScriptsWhileDisabled(true)
         if disabled then
+            -- The class-restriction hint always shows (it explains why the button is dead); only the
+            -- bracket-name explanation honors the option toggle.
             btn:SetScript("OnEnter", function(b)
                 GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
                 GameTooltip:SetText("Your class cannot use this item.", 1, 0.3, 0.3, true)
                 GameTooltip:Show()
             end)
             btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
-        else
+        elseif getOptions().explanationTooltipsEnabled then
             setButtonTooltip(btn, CHOICE_TOOLTIPS[key])
+        else
+            btn:SetScript("OnEnter", nil)        -- clear a tooltip a prior open may have attached
+            btn:SetScript("OnLeave", nil)
         end
     end
 end

@@ -984,6 +984,10 @@ function addon:BuildLootTab()
                 -- available one spells itself out. Plain Buttons drop mouse scripts while disabled
                 -- anyway, but guard explicitly so intent does not hinge on that default.
                 if not b:IsEnabled() then return end
+                -- getOptions (declared later in this file) is not in scope here; read directly. The
+                -- key is seeded true by ensureDefaults, so a missing value never reads as "off".
+                local opts = addon.db and addon.db.options
+                if opts and not opts.explanationTooltipsEnabled then return end
                 GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
                 GameTooltip:SetText(addon.RESPONSE_TOOLTIPS[option.key], 1, 0.82, 0, true)
                 GameTooltip:Show()
@@ -1820,9 +1824,17 @@ function addon:BuildOptionsTab()
         end
     end)
 
+    -- Explanation tooltips (e.g. roll-bracket descriptions on the popup + loot tab)
+    local explanationTipsCB = createOptionsCheckbox(panel, "Show explanation tooltips (spell out the roll brackets, etc.)")
+    explanationTipsCB:SetPoint("TOPLEFT", rollDurLabel, "BOTTOMLEFT", 0, -20)
+    explanationTipsCB:SetChecked(opt.explanationTooltipsEnabled ~= false)
+    explanationTipsCB:SetScript("OnClick", function(selfCB)
+        getOptions(addon).explanationTooltipsEnabled = selfCB:GetChecked() and true or false
+    end)
+
     -- Whitelist
     local whitelistCB = createOptionsCheckbox(panel, "Enable White List (Warning: You will ONLY see loot popups for items on this list)")
-    whitelistCB:SetPoint("TOPLEFT", rollDurLabel, "BOTTOMLEFT", 0, -24)
+    whitelistCB:SetPoint("TOPLEFT", explanationTipsCB, "BOTTOMLEFT", 0, -24)
     whitelistCB:SetChecked(opt.whitelistEnabled and true or false)
     whitelistCB:SetScript("OnClick", function(selfCB)
         getOptions(addon).whitelistEnabled = selfCB:GetChecked() and true or false

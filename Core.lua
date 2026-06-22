@@ -3521,6 +3521,7 @@ function addon:PLAYER_LOGIN()
             minimapButtonHidden = false,
             minimapButtonAngle = 200,
             rollResultTooltipAnchor = "RIGHT",   -- where roll-popup hover tooltips dock: RIGHT/LEFT/TOP/BOTTOM/CURSOR
+            explanationTooltipsEnabled = true,   -- hover tooltips that spell things out (e.g. the roll brackets, popup + loot tab)
         },
         ui = {
             selectedTab = "loot",
