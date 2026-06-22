@@ -230,6 +230,8 @@ local POPUP_INTEREST_OWNER_H = 92       -- floor for the ML popup: its End Roll/
                                         -- of the item icon/name instead of overlapping (mis-clicks).
 local RESPONSE_ORDER = { bis = 5, ms = 4, mu = 3, os = 2, tm = 1, pass = 0 }
 local RESPONSE_LABELS = { bis = "BiS", ms = "MS", mu = "MU", os = "OS", tm = "TM", pass = "Pass" }
+-- Hover text spelling out each roll-choice bracket abbreviation (shared with the loot tab).
+local CHOICE_TOOLTIPS = addon.RESPONSE_TOOLTIPS
 -- ROLL_DURATION / getOptions / getRollDuration are declared at the top of the file so the
 -- core-driven restore path can reach them; the rest of the option helpers live here.
 local function parseItemList(text)
@@ -273,6 +275,17 @@ local function makeButton(parent, text, width)
     b:SetHeight(18)
     b:SetText(text)
     return b
+end
+
+-- Attach a static hover tooltip to a button. Reusable for any button, not just roll choices.
+local function setButtonTooltip(btn, text)
+    if not btn or not text then return end
+    btn:SetScript("OnEnter", function(b)
+        GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+        GameTooltip:SetText(text, 1, 0.82, 0, true)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
 local function getPlayerDisplayName(self, playerKey)
@@ -465,17 +478,22 @@ local function applyInterestButtonAvailability(self, f, roll)
         styleButtonText(btn, false, disabled)
         -- A disabled bracket button is genuinely unclickable; explain why on hover so the raider
         -- knows it is a class restriction, not a bug. SetMotionScriptsWhileDisabled lets the
-        -- OnEnter/OnLeave fire while the button is disabled.
+        -- OnEnter/OnLeave fire while the button is disabled. An enabled bracket instead spells out
+        -- its abbreviation. Owned here (not at creation) so the two states never clobber each other.
         btn:SetMotionScriptsWhileDisabled(true)
         if disabled then
+            -- The class-restriction hint always shows (it explains why the button is dead); only the
+            -- bracket-name explanation honors the option toggle.
             btn:SetScript("OnEnter", function(b)
                 GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
                 GameTooltip:SetText("Your class cannot use this item.", 1, 0.3, 0.3, true)
                 GameTooltip:Show()
             end)
             btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        elseif getOptions().explanationTooltipsEnabled then
+            setButtonTooltip(btn, CHOICE_TOOLTIPS[key])
         else
-            btn:SetScript("OnEnter", nil)
+            btn:SetScript("OnEnter", nil)        -- clear a tooltip a prior open may have attached
             btn:SetScript("OnLeave", nil)
         end
     end
@@ -667,6 +685,9 @@ local function makePopup()
     f.tmBtn:SetPoint("LEFT", f.osBtn, "RIGHT", 3, 0)
     f.passBtn = makeButton(f, "Pass", 42)
     f.passBtn:SetPoint("LEFT", f.tmBtn, "RIGHT", 3, 0)
+    -- The bracket hover tooltips are (re)attached per-open in applyInterestButtonAvailability,
+    -- which owns each button's enabled/disabled state: an enabled bracket spells out its name, a
+    -- disabled one explains the class restriction instead. Setting them here would be clobbered.
 
     -- control row (loot master): End Roll / Cancel on the left, OK (result mode) on the right
     f.rollBtn = makeButton(f, "End Roll", 56)
