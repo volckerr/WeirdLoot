@@ -163,6 +163,13 @@ end
 -- show a popup for every live PENDING lot that lacks one, and close popups for lots that have left.
 function addon:SyncPendingPopups()
     if not self:IsAuthorizedLootMaster() then return end
+    -- Auto-start drives a whole debounced loot batch in one pass. Each StartLiveRoll mutates the
+    -- ledger, and core:emit fires ledgerChanged synchronously, re-entering this function. Left
+    -- unguarded the re-entry drains the rest of the batch depth-first BEFORE the current item's
+    -- DROP is sent, so raiders receive the batch reversed. The flag makes those nested calls a
+    -- no-op so the single outer loop dispatches the batch front-to-back in OrderLotIdsNonEquipFirst
+    -- order (non-equipment first), matching what the ML rolls out.
+    if self._autoStarting then return end
     local core = self.lootCore
 
     -- Surface fresh loot here, state-driven, NOT off a one-shot mint event. A re-dropped copy that
@@ -180,19 +187,22 @@ function addon:SyncPendingPopups()
     local optAutoStart = opt.autoStartRoll
     local optAutoSkip = opt.autoSkipRoll
     if optAutoStart and not optAutoSkip then
-        -- Collect NEW lot ids first (StartLiveRoll fires ledgerChanged -> re-enters this function),
-        -- then start each: already-started lots are no longer NEW on re-entry so no double-broadcast.
+        -- Collect the whole NEW batch first, order it, then start each. The _autoStarting guard
+        -- (top of this function) neutralizes the ledgerChanged re-entry each StartLiveRoll causes,
+        -- so this outer loop is the sole driver and the dispatch order is preserved.
         local toStart = {}
         for _, lot in ipairs(core:List()) do
             if lot.state == core.STATE.NEW then toStart[#toStart + 1] = lot.id end
         end
         toStart = self:OrderLotIdsNonEquipFirst(toStart)   -- non-equipment (bags/mounts) rolls first
+        self._autoStarting = true
         for _, lotId in ipairs(toStart) do
             local cur = core:Get(lotId)
             if cur and cur.state == core.STATE.NEW then
                 self:StartLiveRoll(lotId)
             end
         end
+        self._autoStarting = false
     elseif self.db and self.db.autoRoll and not optAutoSkip then
         for _, lot in ipairs(core:List()) do
             if lot.state == core.STATE.NEW then core:Surface(lot.id) end

@@ -118,7 +118,12 @@ local function makeWorld(playerName, isML)
     env.UnitClass = function() return "Warrior", "WARRIOR" end
     env.GetNumRaidMembers = function() return 5 end
     env.GetNumPartyMembers = function() return 0 end
-    env.GetRaidRosterInfo = function() return playerName, (isML and 2 or 0) end
+    -- index 1 is the loot master so a peer's roster-aware sync (isInRaid(authority)) can see it;
+    -- every other slot reports the running player. Self is matched by name regardless.
+    env.GetRaidRosterInfo = function(i)
+        if i == 1 then return "Masterlooter", 2 end
+        return playerName, (isML and 2 or 0)
+    end
     env.GetLootMethod = function() return "master", 0, 1 end
     env.IsPartyLeader = function() return isML end
     env.SendChatMessage = function() end
@@ -1371,6 +1376,67 @@ test("guard: unlock + reroll retracts the owe and re-creates it for the new winn
     w.addon:RegisterInterest(lotId, "Bob", "ms")
     w.addon:ResolveLiveRoll(lotId)
     eq(owedCount(w), 1, "re-owed after reroll")
+end)
+
+-- ---------------------------------------------------------------------------
+-- auto-start dispatch order: a debounced loot batch must broadcast (and pop up) in
+-- OrderLotIdsNonEquipFirst order, NOT reversed. Regression for the synchronous-ledgerChanged
+-- re-entrancy that drained the batch depth-first and reversed it for raiders.
+-- ---------------------------------------------------------------------------
+test("auto-start broadcasts the batch in order (not reversed)", function()
+    local ml = makeWorld("Masterlooter", true)
+    local sent = {}
+    local origSend = ml.addon.SendLargeMessage
+    ml.addon.SendLargeMessage = function(self, command, values, ...)
+        if command == "DROP" then sent[#sent + 1] = tonumber(values[2]) end   -- field 2 = itemId
+        return origSend(self, command, values, ...)
+    end
+    startSession(ml)
+    ml.addon.db.autoRoll = false
+    ml.addon.db.options = ml.addon.db.options or {}
+    ml.addon.db.options.autoStartRoll = false   -- mint quietly first so mint order is deterministic
+    ml.addon.db.options.autoSkipRoll = false
+
+    -- mint A B C in a known order (the harness bag scan is pairs()-unordered, so mint one at a
+    -- time), leaving them NEW; then flip auto-start on and drive the single batch pass.
+    setBag(ml, 40001, 1); bagUpdate(ml)
+    setBag(ml, 40002, 1); bagUpdate(ml)
+    setBag(ml, 40003, 1); bagUpdate(ml)
+    clearWire()
+    ml.addon.db.options.autoStartRoll = true
+    ml.addon:SyncPendingPopups()
+
+    eq(#sent, 3, "all three lots broadcast")
+    eq(sent[1], 40001, "first DROP is the first-minted lot (A)")
+    eq(sent[2], 40002, "second DROP is B")
+    eq(sent[3], 40003, "third DROP is C (was reversed to C B A before the guard)")
+end)
+
+test("auto-start keeps non-equipment ahead of equipment in the batch", function()
+    local ml = makeWorld("Masterlooter", true)
+    ml.addon.util.REDUCED_ROLL_ITEMS[40004] = true   -- mark 40004 as known non-equipment (rolls first)
+    local sent = {}
+    local origSend = ml.addon.SendLargeMessage
+    ml.addon.SendLargeMessage = function(self, command, values, ...)
+        if command == "DROP" then sent[#sent + 1] = tonumber(values[2]) end
+        return origSend(self, command, values, ...)
+    end
+    startSession(ml)
+    ml.addon.db.autoRoll = false
+    ml.addon.db.options = ml.addon.db.options or {}
+    ml.addon.db.options.autoStartRoll = false
+    ml.addon.db.options.autoSkipRoll = false
+
+    -- mint equipment 40001 BEFORE non-equipment 40004; non-equip must still lead the broadcast
+    setBag(ml, 40001, 1); bagUpdate(ml)
+    setBag(ml, 40004, 1); bagUpdate(ml)
+    clearWire()
+    ml.addon.db.options.autoStartRoll = true
+    ml.addon:SyncPendingPopups()
+
+    eq(#sent, 2, "both lots broadcast")
+    eq(sent[1], 40004, "non-equipment leads despite being minted second")
+    eq(sent[2], 40001, "equipment follows")
 end)
 
 -- ===========================================================================
