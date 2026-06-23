@@ -131,6 +131,34 @@ function addon:InitializeLiveRoll()
     end
 end
 
+-- Stable-reorder a list of lot ids into three roll-out tiers, keeping the original (mint) order
+-- within each tier: the explicit non-equipment list (bags/mounts) first, then any other non-gear
+-- (tokens, consumables, etc. -- this groups tier tokens together), then equipment. Used by every
+-- roll-start path so the quick non-gear rolls clear first, in the popups and the loot menu alike.
+function addon:OrderLotIdsNonEquipFirst(ids)
+    local decorated = {}
+    for i, id in ipairs(ids) do
+        local lot = self.lootCore:Get(id)
+        local itemId = lot and lot.itemId
+        local rank
+        if itemId and util:IsKnownNonEquipment(itemId) then
+            rank = 0        -- explicit list: roll out first
+        elseif itemId and util:LacksEquipSlot(itemId) then
+            rank = 1        -- general non-equipment: next (groups tier tokens)
+        else
+            rank = 2        -- equipment: last
+        end
+        decorated[i] = { id = id, idx = i, rank = rank }
+    end
+    table.sort(decorated, function(a, b)
+        if a.rank ~= b.rank then return a.rank < b.rank end
+        return a.idx < b.idx                                      -- stable within each tier
+    end)
+    local out = {}
+    for i, d in ipairs(decorated) do out[i] = d.id end
+    return out
+end
+
 -- Reconcile pending popups against the core on any ledger change: surface fresh loot to PENDING,
 -- show a popup for every live PENDING lot that lacks one, and close popups for lots that have left.
 function addon:SyncPendingPopups()
@@ -158,6 +186,7 @@ function addon:SyncPendingPopups()
         for _, lot in ipairs(core:List()) do
             if lot.state == core.STATE.NEW then toStart[#toStart + 1] = lot.id end
         end
+        toStart = self:OrderLotIdsNonEquipFirst(toStart)   -- non-equipment (bags/mounts) rolls first
         for _, lotId in ipairs(toStart) do
             local cur = core:Get(lotId)
             if cur and cur.state == core.STATE.NEW then
@@ -178,11 +207,17 @@ function addon:SyncPendingPopups()
     end
 
     local livePending = {}
+    local toShow = {}
     for _, lot in ipairs(core:List()) do
         if lot.state == core.STATE.PENDING then
             livePending[lot.id] = true
-            if not self:HasOpenPendingForLot(lot.id) then self:ShowPendingPopup(lot) end
+            if not self:HasOpenPendingForLot(lot.id) then toShow[#toShow + 1] = lot.id end
         end
+    end
+    -- non-equipment (bags/mounts) gets its pending popup first so the ML starts those rolls first
+    for _, lotId in ipairs(self:OrderLotIdsNonEquipFirst(toShow)) do
+        local lot = core:Get(lotId)
+        if lot then self:ShowPendingPopup(lot) end
     end
 
     -- Close any pending popup whose lot is no longer a live PENDING: rolled, skipped, or its copies
@@ -522,33 +557,36 @@ local function isPlayerAllowedForRoll(self, roll, playerName)
     return self:IsPlayerAllowedForItem(itemName, playerName)
 end
 
+-- Hover text for a disabled bracket, by the reason util:RollTierAvailability returns.
+local DISABLED_REASON_TEXT = {
+    type = "Not used for this item type.",
+    class = "Your class cannot use this item.",
+}
+
 local function applyInterestButtonAvailability(self, f, roll)
     local playerName = util:GetPlayerName("player")
     local allowed = isPlayerAllowedForRoll(self, roll, playerName)
+    -- shared policy: a roll popup is always an open (never locked) lot
+    local avail = util:RollTierAvailability(roll.itemId, allowed, false)
 
     for key, btn in pairs(interestButtons(f)) do
-        local disabled = false
-        if key == "pass" then
-            btn:Enable()
-        elseif allowed then
-            btn:Enable()
-        else
-            btn:Disable()
-            disabled = true
-        end
+        local reason = avail[key]
+        local disabled = reason ~= nil
+        if disabled then btn:Disable() else btn:Enable() end
         btn:SetAlpha(disabled and 0.45 or 1)
         styleButtonText(btn, false, disabled)
-        -- A disabled bracket button is genuinely unclickable; explain why on hover so the raider
-        -- knows it is a class restriction, not a bug. SetMotionScriptsWhileDisabled lets the
-        -- OnEnter/OnLeave fire while the button is disabled. An enabled bracket instead spells out
-        -- its abbreviation. Owned here (not at creation) so the two states never clobber each other.
+        -- A disabled bracket button is genuinely unclickable; explain why on hover so the player
+        -- knows it is a restriction, not a bug. SetMotionScriptsWhileDisabled lets the OnEnter/OnLeave
+        -- fire while the button is disabled. An enabled bracket instead spells out its abbreviation.
+        -- Owned here (not at creation) so the two states never clobber each other.
         btn:SetMotionScriptsWhileDisabled(true)
         if disabled then
-            -- The class-restriction hint always shows (it explains why the button is dead); only the
+            -- The disabled hint always shows (it explains why the button is dead); only the
             -- bracket-name explanation honors the option toggle.
+            local text = DISABLED_REASON_TEXT[reason] or ""
             btn:SetScript("OnEnter", function(b)
                 GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-                GameTooltip:SetText("Your class cannot use this item.", 1, 0.3, 0.3, true)
+                GameTooltip:SetText(text, 1, 0.3, 0.3, true)
                 GameTooltip:Show()
             end)
             btn:SetScript("OnLeave", function() GameTooltip:Hide() end)

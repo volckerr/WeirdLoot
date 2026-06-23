@@ -353,3 +353,89 @@ function util:GetLootSortInfo(itemLink)
         itemName = itemName or "",
     }
 end
+
+-- Items that roll on the reduced MS(need)/OS(greed)/Pass set and are rolled out first: things that
+-- are not gear and carry no class restriction (bags, mounts, containers, ...). This is an EXPLICIT
+-- itemId list, not a property heuristic: tier tokens look like non-equipment by item type but turn
+-- into gear and must keep the full bracket set and class rules, so a heuristic would wrongly reduce
+-- them. Non-equipment is the rarer case, so listing it is safer than a general rule. Add itemIds here.
+util.REDUCED_ROLL_ITEMS = {
+    -- Epic non-equipment raid drops (mounts and bags), seeded from the ChromieCraft item_template +
+    -- loot tables, grouped by raid. Excludes 5-mans, world drops, and PvP rewards.
+    -- Onyxia's Lair
+    [49295] = true,  -- Enlarged Onyxia Hide Backpack
+    [49636] = true,  -- Reins of the Onyxian Drake
+    -- Zul'Gurub
+    [19872] = true,  -- Swift Razzashi Raptor
+    [19902] = true,  -- Swift Zulian Tiger
+    -- Karazhan
+    [30480] = true,  -- Fiery Warhorse's Reins
+    -- Magtheridon's Lair
+    [34845] = true,  -- Pit Lord's Satchel
+    -- Tempest Keep
+    [32458] = true,  -- Ashes of Al'ar
+    -- The Obsidian Sanctum
+    [43345] = true,  -- Dragon Hide Bag
+    [43346] = true,  -- Large Satchel of Spoils (25m bonus bag)
+    [43347] = true,  -- Satchel of Spoils (10m bonus bag)
+    [43954] = true,  -- Reins of the Twilight Drake
+    [43986] = true,  -- Reins of the Black Drake
+    -- The Eye of Eternity
+    [43952] = true,  -- Reins of the Azure Drake
+    [43953] = true,  -- Reins of the Blue Drake
+    -- Vault of Archavon
+    [43959] = true,  -- Reins of the Grand Black War Mammoth
+    [44083] = true,  -- Reins of the Grand Black War Mammoth
+    -- Ulduar
+    [45693] = true,  -- Mimiron's Head
+    -- Trial of the Crusader (Tribute Chest)
+    [49044] = true,  -- Swift Alliance Steed
+    [49046] = true,  -- Swift Horde Wolf
+    -- Icecrown Citadel
+    [50818] = true,  -- Invincible's Reins
+}
+
+-- True if the item (a link or an itemId) is on the explicit non-equipment list.
+function util:IsKnownNonEquipment(item)
+    local id = type(item) == "number" and item or self:ItemIdFromLink(item)
+    return id ~= nil and self.REDUCED_ROLL_ITEMS[id] == true
+end
+
+-- Property heuristic: does the item lack a real equip slot? Used ONLY for roll-OUT ordering, a
+-- harmless grouping, NEVER for the bracket set: tier tokens read as non-equipment here but must keep
+-- the full set, so the button policy keys off the explicit list above instead. `item` is a link or
+-- itemId; an uncached item reads as gear so it just orders later.
+function util:LacksEquipSlot(item)
+    if not item then return false end
+    local name, _, _, _, _, _, _, _, equipLoc = GetItemInfo(item)
+    if not name then return false end
+    if not equipLoc or equipLoc == "" then return true end
+    if equipLoc == "INVTYPE_BAG" then return true end
+    return false
+end
+
+local ROLL_TIERS = { "bis", "ms", "mu", "os", "tm", "pass" }
+local NONEQUIP_TIERS = { ms = true, os = true, pass = true }   -- reduced-roll items get MS/OS(greed)/Pass
+
+-- Single source of truth for which roll tiers an item offers, so the roll popup and the loot tab
+-- (mirrors of each other) never drift. They differ only in how they render the result. Returns a map
+-- tier -> disable reason ("locked" / "type" / "class") or nil when the tier is available.
+function util:RollTierAvailability(item, isAllowed, isLocked)
+    local reduced = self:IsKnownNonEquipment(item)
+    local out = {}
+    for _, key in ipairs(ROLL_TIERS) do
+        local reason
+        if isLocked then
+            reason = "locked"                              -- a locked (rolled-out) lot disables every tier
+        elseif key == "pass" then
+            reason = nil                                   -- pass is always available on an open lot
+        elseif reduced then
+            -- reduced-roll item (bag/mount/etc.): MS/OS/Pass only, and no class restriction applies
+            reason = (not NONEQUIP_TIERS[key]) and "type" or nil
+        elseif not isAllowed then
+            reason = "class"                               -- gear (incl. tier tokens) honors class rules
+        end
+        out[key] = reason
+    end
+    return out
+end

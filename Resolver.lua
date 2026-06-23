@@ -775,6 +775,8 @@ function addon:ProcessLoot()
         return
     end
 
+    queue = self:OrderLotIdsNonEquipFirst(queue)   -- roll non-equipment (bags/mounts) out first
+
     local batchSize = tonumber(self.db and self.db.options and self.db.options.rollBatchSize) or 5
     if batchSize < 1 then batchSize = 1 end
 

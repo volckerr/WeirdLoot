@@ -324,16 +324,12 @@ local function updateLootMasterControlButtons(row, isVisible, activeRoll, isLock
     end
 end
 
-local function applyLootChoiceAvailability(row, isLocked, isAllowed)
+local function applyLootChoiceAvailability(row, isLocked, isAllowed, itemLink)
+    -- Same policy as the roll popup (util:RollTierAvailability), rendered as plain enable/disable.
+    local avail = util:RollTierAvailability(itemLink, isAllowed, isLocked)
     for _, option in ipairs(RESPONSE_BUTTONS) do
         local button = row.choiceButtons[option.key]
-        if isLocked then
-            button:Disable()
-        elseif not isAllowed and option.key ~= "pass" then
-            button:Disable()
-        else
-            button:Enable()
-        end
+        if avail[option.key] then button:Disable() else button:Enable() end
     end
 end
 
@@ -2495,7 +2491,7 @@ function addon:RefreshLootTab()
         local locked = self:IsItemLocked(item.id)
         local allowedForPlayer = isPlayerAllowedForLootItem(item, playerName)
         row.icon:SetDesaturated(locked)        -- grey out the item icon once it's been rolled out
-        applyLootChoiceAvailability(row, locked, allowedForPlayer)
+        applyLootChoiceAvailability(row, locked, allowedForPlayer, item.link)
         updateLootMasterControlButtons(row, self:IsAuthorizedLootMaster(), self:GetActiveLiveRollForItem(item), locked)
         local typeText, slotText = getLootItemColumns(item.link)
         row.itemType:SetText(typeText)
