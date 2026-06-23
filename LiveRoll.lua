@@ -1367,7 +1367,7 @@ function addon:ShowResultPopup(roll, winners, sections, slot)
     if #winnerList == 0 then
         local namedRule = roll.name and self:GetNamedRule(roll.name)
         if namedRule and namedRule.raw and namedRule.raw ~= "" then
-            line = "Winner: Loot Council"
+            line = "Winner: Loot Council Decision"
         else
             line = "Winner: No rollers."
         end
