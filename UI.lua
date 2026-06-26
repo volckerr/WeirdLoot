@@ -848,21 +848,13 @@ function addon:ShowImportWindow(kind, titleText, bodyText, onSave)
     window:Show()
 end
 
+-- Exports are open to everyone: raiders render lootView.results from the same synced ledger as the
+-- ML, so anyone can pull a winners list or audit log for the loot sheet without holding ML.
 function addon:ExportWinners()
-    if not self:IsAuthorizedLootMaster() then
-        self:Print("Only the loot master can export winners.")
-        return
-    end
-
     self:ShowExportWindow("Winners", "Export Winners", self:BuildWinnersExportText())
 end
 
 function addon:ExportLog()
-    if not self:IsAuthorizedLootMaster() then
-        self:Print("Only the loot master can export the log.")
-        return
-    end
-
     self:ShowExportWindow("Log", "Export Log", self:BuildDetailedExportLogText())
 end
 
@@ -1636,8 +1628,42 @@ function addon:BuildMasterTab()
         addon:ToggleAllowAllTrades()
     end)
 
-    -- Section 2: Import/Export Controls.
-    local ioHeader, ioDivider = makeSectionHeader("Import/Export Controls", processButton, "BOTTOMLEFT", -16)
+    -- Section 2: Session Controls. ML-gated, grouped with the Loot Master Controls above. The
+    -- Import/Export section sits below since its exports are usable by any raider (not ML-gated).
+    local sessHeader, sessDivider = makeSectionHeader("Session Controls", processButton, "BOTTOMLEFT", -16)
+
+    local startButton = createButton(panel, "Start Session", 120, 24)
+    startButton:SetPoint("TOPLEFT", sessDivider, "BOTTOMLEFT", 0, -8)
+    startButton:SetScript("OnClick", function()
+        -- Restarting over a live session is destructive (wipes the running tally), so confirm first.
+        if addon.session and addon.session.active then
+            StaticPopup_Show("WEIRDLOOT_RESTART_SESSION")
+        else
+            addon:StartLootSession()
+        end
+    end)
+
+    local endSessionButton = createButton(panel, "End Session", 120, 24)
+    endSessionButton:SetPoint("LEFT", startButton, "RIGHT", 8, 0)
+    endSessionButton:SetScript("OnClick", function()
+        StaticPopup_Show("WEIRDLOOT_END_SESSION")
+    end)
+
+    local scanButton = createButton(panel, "Scan Bags", 120, 24)
+    scanButton:SetPoint("LEFT", endSessionButton, "RIGHT", 8, 0)
+    scanButton:SetScript("OnClick", function()
+        addon:RefreshSessionItems(true)
+    end)
+
+    local unlockButton = createButton(panel, "Unlock Roll", 100, 24)
+    unlockButton:SetPoint("LEFT", scanButton, "RIGHT", 8, 0)
+    unlockButton:SetScript("OnClick", function()
+        addon:UnlockAllSessionRolls()
+    end)
+
+    -- Section 3: Import/Export Controls. Exports are open to everyone (raiders render results from
+    -- the synced ledger); the import/broadcast buttons stay ML-gated by the refresh below.
+    local ioHeader, ioDivider = makeSectionHeader("Import/Export Controls", startButton, "BOTTOMLEFT", -16)
 
     local exportWinnersButton = createButton(panel, "Export Winners", 110, 24)
     exportWinnersButton:SetPoint("TOPLEFT", ioDivider, "BOTTOMLEFT", 0, -8)
@@ -1673,38 +1699,6 @@ function addon:BuildMasterTab()
     broadcastNamedItemsButton:SetPoint("LEFT", importNamedItemsButton, "RIGHT", 8, 0)
     broadcastNamedItemsButton:SetScript("OnClick", function()
         addon:BroadcastNamedItems()
-    end)
-
-    -- Section 3: Session Controls.
-    local sessHeader, sessDivider = makeSectionHeader("Session Controls", exportWinnersButton, "BOTTOMLEFT", -16)
-
-    local startButton = createButton(panel, "Start Session", 120, 24)
-    startButton:SetPoint("TOPLEFT", sessDivider, "BOTTOMLEFT", 0, -8)
-    startButton:SetScript("OnClick", function()
-        -- Restarting over a live session is destructive (wipes the running tally), so confirm first.
-        if addon.session and addon.session.active then
-            StaticPopup_Show("WEIRDLOOT_RESTART_SESSION")
-        else
-            addon:StartLootSession()
-        end
-    end)
-
-    local endSessionButton = createButton(panel, "End Session", 120, 24)
-    endSessionButton:SetPoint("LEFT", startButton, "RIGHT", 8, 0)
-    endSessionButton:SetScript("OnClick", function()
-        StaticPopup_Show("WEIRDLOOT_END_SESSION")
-    end)
-
-    local scanButton = createButton(panel, "Scan Bags", 120, 24)
-    scanButton:SetPoint("LEFT", endSessionButton, "RIGHT", 8, 0)
-    scanButton:SetScript("OnClick", function()
-        addon:RefreshSessionItems(true)
-    end)
-
-    local unlockButton = createButton(panel, "Unlock Roll", 100, 24)
-    unlockButton:SetPoint("LEFT", scanButton, "RIGHT", 8, 0)
-    unlockButton:SetScript("OnClick", function()
-        addon:UnlockAllSessionRolls()
     end)
 
     panel.startButton = startButton
@@ -1754,7 +1748,7 @@ function addon:BuildMasterTab()
 	setButtonTooltip(processButton, "Start Rolls",
 		"Starts live rolls in batches (size configurable in Options). The next batch starts when the current one finishes.")
 
-    panel.controlsTitle = createLabel(panel, "Controls", "TOPLEFT", startButton, "BOTTOMLEFT", 0, -24)
+    panel.controlsTitle = createLabel(panel, "Controls", "TOPLEFT", exportWinnersButton, "BOTTOMLEFT", 0, -24)
     panel.controlsTitle:SetFontObject(GameFontHighlightLarge)
 
     panel.summary = createLabel(panel, "", "TOPLEFT", panel.controlsTitle, "BOTTOMLEFT", 0, -8)
@@ -2850,13 +2844,15 @@ function addon:RefreshMasterTab()
         panel.warning:SetText(authorized and "" or "You are not the current Loot Master. Controls are locked.")
     end
 
+    -- Exports are open to everyone, so keep them enabled regardless of ML authority.
+    panel.exportWinnersButton:Enable()
+    panel.exportLogButton:Enable()
+
     if authorized then
         panel.startButton:Enable()
         panel.endSessionButton:Enable()
         panel.scanButton:Enable()
         panel.processButton:Enable()
-        panel.exportWinnersButton:Enable()
-        panel.exportLogButton:Enable()
         panel.importRosterButton:Enable()
         panel.broadcastRosterButton:Enable()
         panel.importNamedItemsButton:Enable()
@@ -2868,8 +2864,6 @@ function addon:RefreshMasterTab()
         panel.endSessionButton:Disable()
         panel.scanButton:Disable()
         panel.processButton:Disable()
-        panel.exportWinnersButton:Disable()
-        panel.exportLogButton:Disable()
         panel.importRosterButton:Disable()
         panel.broadcastRosterButton:Disable()
         panel.importNamedItemsButton:Disable()
