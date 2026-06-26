@@ -1,0 +1,3 @@
+# Scratch and design notes stay local
+*.md
+!README.md

@@ -728,9 +728,16 @@ local function highlightInterestButton(f, tier)
     for key, btn in pairs(interestButtons(f)) do
         if btn then
             local chosen = key == tier
-            -- lock the chosen button pushed; leave the rest in their normal (up) state
-            btn:SetButtonState(chosen and "PUSHED" or "NORMAL", chosen)
-            styleButtonText(btn, chosen, not btn:IsEnabled())
+            -- Lock the chosen button pushed; leave the rest in their normal (up) state. A bracket
+            -- disabled by applyInterestButtonAvailability MUST keep its DISABLED state: SetButtonState
+            -- ("NORMAL"/"PUSHED") resurrects it to a clickable state while the faded alpha stays, so it
+            -- reads disabled but accepts a pick. Key off the button STATE, not IsEnabled() -- IsEnabled()
+            -- returns truthy right after Disable() here, which is why the earlier guard did nothing.
+            local isDisabled = btn:GetButtonState() == "DISABLED"
+            if not isDisabled then
+                btn:SetButtonState(chosen and "PUSHED" or "NORMAL", chosen)
+            end
+            styleButtonText(btn, chosen, isDisabled)
         end
     end
 end

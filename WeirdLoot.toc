@@ -2,14 +2,13 @@
 ## Title: WeirdLoot
 ## Notes: End-of-raid loot coordination for Wrath 3.3.5a raids
 ## Author: Volcker
-## Version: 1.1.4
+## Version: 1.1.5
 ## IconTexture: Interface\AddOns\WeirdLoot\Textures\weirdloot
 ## SavedVariables: WeirdLootDB, WeirdLootSessionDB
 ## SavedVariablesPerCharacter: WeirdLootDebugLog
 
 Libs\LibStub\LibStub.lua
-Libs\CallbackHandler-1.0\CallbackHandler-1.0.lua
-Libs\AceComm-3.0\ChatThrottleLib.lua
+Libs\ChatThrottleLib\ChatThrottleLib.lua
 Libs\LibDeflate\LibDeflate.lua
 Libs\LibSerialize\LibSerialize.lua
 Libs\WeirdComm-1.0\WeirdComm-1.0.lua
