@@ -2380,6 +2380,34 @@ function addon:RefreshOptionsTab()
     end
 end
 
+-- Circular sparkle orbit for the "loot owed to you" minimap glow. Self-contained (no AutoCastShine,
+-- which orbits the square button edge, and no WeakAuras/LibCustomGlow, whose sparkle path is also
+-- rectangular and whose texture ships under the WeakAuras addon). We place N sparkles on a CIRCLE via
+-- cos/sin and spin the ring; each sparkle twinkles in size/alpha. Sparkle art is the Blizzard autocast
+-- shine sub-region of UI-ItemSockets, always present.
+local SHINE_TEXTURE = "Interface\\ItemSocketingFrame\\UI-ItemSockets"
+local SHINE_TCOORD  = { 0.3984375, 0.4453125, 0.40234375, 0.44921875 }
+local SHINE_COUNT   = 10
+local SHINE_COLOR   = { 0.95, 0.9, 0.35 }   -- warm gold ("loot")
+local SHINE_REV_PER_SEC = 0.32              -- ring spin speed
+local TWO_PI = math.pi * 2
+
+local function shineOnUpdate(shine, elapsed)
+    shine.angle = (shine.angle + elapsed * SHINE_REV_PER_SEC * TWO_PI) % TWO_PI
+    local radius = (shine:GetWidth() or 31) / 2 + 1
+    local now = (GetTime and GetTime()) or 0
+    local n = #shine.sparkles
+    for i = 1, n do
+        local a = shine.angle + (i - 1) * (TWO_PI / n)
+        local s = shine.sparkles[i]
+        s:SetPoint("CENTER", shine, "CENTER", math.cos(a) * radius, math.sin(a) * radius)
+        local tw = 0.5 + 0.5 * math.sin(now * 3 + i)   -- per-sparkle twinkle
+        s:SetAlpha(0.35 + 0.65 * tw)
+        local sz = 5 + 3 * tw
+        s:SetWidth(sz); s:SetHeight(sz)
+    end
+end
+
 local function positionMinimapButton(button)
     local opt = getOptions(addon)
     local angle = tonumber(opt.minimapButtonAngle) or 200
@@ -2465,13 +2493,24 @@ function addon:BuildMinimapButton()
     end)
 
     self.ui.minimapButton = button
-    -- "Loot owed to you" indicator: the pet-autocast radial sparkle (AutoCastShine, native to 3.3.5a)
-    -- orbiting the button. Hidden until the mirrored ledger shows a copy we won but have not received.
-    local shine = CreateFrame("Frame", "WeirdLootMinimapShine", button, "AutoCastShineTemplate")
+    -- "Loot owed to you" indicator: a circular sparkle orbit (see shineOnUpdate), hidden until the
+    -- mirrored ledger shows a copy we won but have not yet received.
+    local shine = CreateFrame("Frame", nil, button)
     shine:SetAllPoints(button)
     shine:SetFrameLevel((button:GetFrameLevel() or 0) + 1)
+    shine.angle = 0
+    shine.sparkles = {}
+    for i = 1, SHINE_COUNT do
+        local s = shine:CreateTexture(nil, "OVERLAY")
+        s:SetTexture(SHINE_TEXTURE)
+        s:SetTexCoord(SHINE_TCOORD[1], SHINE_TCOORD[2], SHINE_TCOORD[3], SHINE_TCOORD[4])
+        s:SetBlendMode("ADD")
+        s:SetVertexColor(SHINE_COLOR[1], SHINE_COLOR[2], SHINE_COLOR[3])
+        s:SetWidth(6); s:SetHeight(6)
+        s:Hide()
+        shine.sparkles[i] = s
+    end
     self.ui.minimapShine = shine
-    if AutoCastShine_AutoCastStop then AutoCastShine_AutoCastStop(shine) end
 
     positionMinimapButton(button)
 
@@ -2499,14 +2538,12 @@ end
 function addon:SetMinimapOwedGlow(shown)
     local shine = self.ui and self.ui.minimapShine
     if not shine then return end
-    -- AutoCastShineTemplate only self-drives OnLoad; its animation runs from AutoCastShine_OnUpdate
-    -- (which orbits every shine in the shared global table). Drive it ourselves only while glowing.
-    if shown and AutoCastShine_AutoCastStart then
-        AutoCastShine_AutoCastStart(shine)
-        shine:SetScript("OnUpdate", function(s, elapsed) AutoCastShine_OnUpdate(s, elapsed) end)
+    if shown then
+        for _, s in ipairs(shine.sparkles) do s:Show() end
+        shine:SetScript("OnUpdate", shineOnUpdate)
     else
-        if AutoCastShine_AutoCastStop then AutoCastShine_AutoCastStop(shine) end
         shine:SetScript("OnUpdate", nil)
+        for _, s in ipairs(shine.sparkles) do s:Hide() end
     end
 end
 
