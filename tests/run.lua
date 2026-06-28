@@ -1665,6 +1665,38 @@ test("manual hand-trade of a NON-owed item delivers nothing (no phantom)", funct
     eq(owedCount(w), 1, "owe for 40005 untouched by trading an unrelated item")
 end)
 
+-- Allow All Trades OFF (autoCancel): decline UNSOLICITED incoming trades, but never a trade the ML
+-- starts. The discriminator is TRADE_REQUEST (fires only for an incoming request on our side).
+test("autoCancel: an unsolicited trade (TRADE_REQUEST then TRADE_SHOW) is declined", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon.payout:SetAutoCancel(true)
+    setPartner(w, "Stranger")
+    w.env.__closeTrade = 0
+    fireEvent(w, "TRADE_REQUEST", "Stranger")    -- they opened the trade with us
+    fireEvent(w, "TRADE_SHOW")
+    eq(w.env.__closeTrade, 1, "unsolicited trade is closed by autoCancel")
+end)
+
+test("autoCancel: a self-initiated trade (no TRADE_REQUEST) is allowed", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon.payout:SetAutoCancel(true)
+    setPartner(w, "Friend")
+    w.env.__closeTrade = 0
+    fireEvent(w, "TRADE_SHOW")                    -- ML opened it: no preceding TRADE_REQUEST
+    eq(w.env.__closeTrade, 0, "a trade the ML starts is not declined even with autoCancel on")
+end)
+
+test("autoCancel: a cancelled incoming request does not taint a later self-initiated trade", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon.payout:SetAutoCancel(true)
+    setPartner(w, "Friend")
+    w.env.__closeTrade = 0
+    fireEvent(w, "TRADE_REQUEST", "Stranger")     -- incoming request...
+    fireEvent(w, "TRADE_REQUEST_CANCEL")          -- ...declined/timed out, no window opens
+    fireEvent(w, "TRADE_SHOW")                     -- now the ML starts their own trade
+    eq(w.env.__closeTrade, 0, "the stale incoming flag was cleared, so the ML's trade is allowed")
+end)
+
 test("trade engine: short stock delivers what it can, rest stays owed", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
@@ -1943,6 +1975,7 @@ test("trade engine: declines a non-owed player's trade during payout", function(
     w.addon.payout:Owe("Alice", 40005, 1, linkFor(40005))   -- someone is owed
     w.addon.payout:StartPayout()
     setPartner(w, "Bob")                                     -- Bob is NOT owed
+    fireEvent(w, "TRADE_REQUEST", "Bob")                     -- incoming: Bob opened the trade with us
     fireEvent(w, "TRADE_SHOW")
     check(w.env.__closeTrade >= 1, "non-owed trade declined (CloseTrade called)")
     eq(owedCount(w), 1, "Alice still owed; nothing handed to Bob")
@@ -1956,6 +1989,7 @@ test("trade engine: Allow All Trades OFF declines an owed player's trade during 
     w.addon.payout:StartPayout()
     local closesBefore = w.env.__closeTrade
     setPartner(w, "Alice")
+    fireEvent(w, "TRADE_REQUEST", "Alice")                   -- incoming: Alice opened the trade
     fireEvent(w, "TRADE_SHOW")
     check(w.env.__closeTrade > closesBefore, "owed trade declined when allow-all is off")
     eq(owedCount(w), 1, "owed item remains owed because the trade never opened")
@@ -1969,6 +2003,7 @@ test("trade engine: Allow All Trades OFF declines trades even with payout paused
     w.addon:StopPayout()
     local closesBefore = w.env.__closeTrade
     setPartner(w, "Alice")
+    fireEvent(w, "TRADE_REQUEST", "Alice")                   -- incoming: Alice opened the trade
     fireEvent(w, "TRADE_SHOW")
     check(w.env.__closeTrade > closesBefore, "trade declined even while payout is off")
     eq(owedCount(w), 1, "owed item remains owed with payout paused")
@@ -1982,6 +2017,7 @@ test("trade engine: Allow All Trades default ON lets a non-owed trade open durin
     w.addon.payout:StartPayout()
     local closesBefore = w.env.__closeTrade
     setPartner(w, "Bob")                                     -- Bob is NOT owed
+    fireEvent(w, "TRADE_REQUEST", "Bob")                     -- incoming: Bob opened the trade with us
     fireEvent(w, "TRADE_SHOW")
     eq(w.env.__closeTrade, closesBefore, "non-owed trade is NOT auto-declined while allow-all is on")
     eq(owedCount(w), 1, "Alice still owed; the non-owed trade did not touch the ledger")

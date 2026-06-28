@@ -38,10 +38,11 @@
           print(text)  (function) sink for local status lines. Default: chat frame
                     prefixed with name.
           debug(text)  (function) sink for verbose tracing. Default: no-op.
-          autoCancel (bool) while payout is on, decline (and whisper) trades from
-                    players NOT on the owed list. Default TRUE. Runtime-only (not
-                    persisted), so it resets on each session; only matters during
-                    payout, and you can flip it with SetAutoCancel.
+          autoCancel (bool) decline (and whisper) UNSOLICITED incoming trades --
+                    ones a partner opens with us (preceded by TRADE_REQUEST). Trades
+                    the loot master STARTS (right-click -> Trade) are always allowed.
+                    Runtime-only (not persisted), resets each session; flip it with
+                    SetAutoCancel.
 
     Ledger:
       engine:Owe(player, itemId, count, link) -> newTotal
@@ -87,7 +88,7 @@
       stays owed for a later trade.
 ============================================================================]]--
 
-local MAJOR, MINOR = "TradeDeliver-1.0", 1
+local MAJOR, MINOR = "TradeDeliver-1.0", 2
 
 local TradeDeliver
 if LibStub then
@@ -397,10 +398,11 @@ function TradeDeliver:New(config)
     e._dbg = config.debug or function() end
     e._onDelivered = config.onDelivered or function() end  -- (player, itemId, count) on trade complete
     e._log = config.log or function() end                  -- (ev, data) trade-flow trace (optional)
-    -- autoCancel is a runtime flag (default OFF), not persisted. When ON, EVERY incoming trade
-    -- is declined immediately, regardless of payout state or whether the partner is owed loot.
-    -- Kept out of db on purpose so it always defaults to allow-all each session; the loot master
-    -- can flip it via the toggle.
+    -- autoCancel is a runtime flag (default OFF), not persisted. When ON, every UNSOLICITED incoming
+    -- trade (one a partner opens with us, preceded by TRADE_REQUEST) is declined immediately,
+    -- regardless of payout state or whether the partner is owed; a trade the loot master STARTS is
+    -- never declined. Kept out of db on purpose so it defaults to allow-all each session; the loot
+    -- master can flip it via the toggle.
     e.autoCancel = (config.autoCancel == true)
 
     -- Payout mode is ON by default for every engine lifetime. Owes added while no session
@@ -415,6 +417,8 @@ function TradeDeliver:New(config)
     e.frame = CreateFrame("Frame")
     e.frame:RegisterEvent("TRADE_SHOW")
     e.frame:RegisterEvent("TRADE_CLOSED")
+    e.frame:RegisterEvent("TRADE_REQUEST")          -- an UNSOLICITED incoming trade request (someone trading US)
+    e.frame:RegisterEvent("TRADE_REQUEST_CANCEL")   -- that request was declined / timed out / withdrawn
     e.frame:RegisterEvent("TRADE_ACCEPT_UPDATE")
     e.frame:RegisterEvent("BAG_UPDATE")
     e.frame:RegisterEvent("UI_INFO_MESSAGE")    -- carries the yellow "Trade complete." info message
@@ -423,7 +427,14 @@ function TradeDeliver:New(config)
     -- which a successful trade still needs in _onTradeComplete (TRADE_CLOSED fires around the
     -- same time as ERR_TRADE_COMPLETE); `pending` is cleared fresh on each TRADE_SHOW instead.
     e.frame:SetScript("OnEvent", function(_, event, arg1, arg2)
-        if event == "TRADE_SHOW" then
+        if event == "TRADE_REQUEST" then
+            -- Only an UNSOLICITED trade fires this on our side; a trade WE start (right-click ->
+            -- Trade) does not. Mark the next TRADE_SHOW as incoming so autoCancel can decline it
+            -- while still letting trades the loot master opens through.
+            e.incomingTrade = true
+        elseif event == "TRADE_REQUEST_CANCEL" then
+            e.incomingTrade = nil       -- declined/timed-out: no window opens, so don't taint the next trade
+        elseif event == "TRADE_SHOW" then
             e.tradeOpen = true
             e.placedSnapshot = nil      -- fresh per trade
             e.lastTradeError = nil      -- fresh per trade
@@ -431,6 +442,7 @@ function TradeDeliver:New(config)
             e:_onTradeShow()
         elseif event == "TRADE_CLOSED" then
             e.tradeOpen = false
+            e.incomingTrade = nil       -- safety: never carry an incoming flag past a closed window
             e:_trace(("CLOSED pending=%s err=%s"):format(e.pending and "Y" or "N", e.lastTradeError and "Y" or "N"))
             e:_onTradeClosed()
         elseif event == "TRADE_ACCEPT_UPDATE" then
@@ -740,8 +752,14 @@ function Engine:_onTradeShow()
     local entry, key = self:_owedFor(partner, false)
     self._log("td-show", { partner = partner, payoutActive = self.payoutActive and true or false, owed = entry and #entry.items or 0 })
 
-    if self.autoCancel then
-        self._dbg(partner .. " trade declined (Allow All Trades is off)")
+    -- A trade WE opened (no preceding TRADE_REQUEST on our side) bypasses autoCancel: the toggle
+    -- declines UNSOLICITED incoming trades, not ones the loot master starts on purpose. Consume the
+    -- incoming flag here so it never carries to the next trade.
+    local selfInitiated = not self.incomingTrade
+    self.incomingTrade = nil
+
+    if self.autoCancel and not selfInitiated then
+        self._dbg(partner .. " trade declined (Incoming Trades is off)")
         self:_whisper(partner, "Trades are closed right now - trade declined.")
         CloseTrade()
         return
