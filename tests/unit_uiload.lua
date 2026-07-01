@@ -70,4 +70,45 @@ H.test("minimap entry points are defined and run", function()
     H.check(true, "minimap build + glow + toggle run without error")
 end)
 
+-- UI/Minimap.lua: the "ML is not accepting trades" red-X warning gating.
+H.test("minimap trade-status warning gates on session + accepting-trades state", function()
+    local w = uiWorld()
+    w.addon:InitializeUI()
+    w.addon:BuildMinimapButton()
+    H.eq(type(w.addon.ShouldWarnMLNotAcceptingTrades), "function", "predicate defined")
+    H.eq(type(w.addon.UpdateMinimapTradeStatus), "function", "updater defined")
+    H.notNil(w.addon.ui.minimapButton.tradeX, "red-X texture created on the button")
+
+    -- No session: never warn, even before payout exists.
+    H.eq(w.addon:ShouldWarnMLNotAcceptingTrades(), false, "no session -> no warning")
+    w.addon:UpdateMinimapTradeStatus()
+
+    F.startSession(w)
+    w.addon:StartPayout()
+    H.eq(w.addon:ShouldWarnMLNotAcceptingTrades(), false, "session live + accepting -> no warning")
+    w.addon:StopPayout()
+    H.eq(w.addon:ShouldWarnMLNotAcceptingTrades(), true, "session live + payout paused -> warn")
+    w.addon:UpdateMinimapTradeStatus()   -- runs without error with the warning active
+    H.check(true, "UpdateMinimapTradeStatus ran through both states")
+end)
+
+-- UI/Minimap.lua: the icon desaturates when no loot master is in play.
+H.test("minimap ML-active desaturation gates on a resolved loot master", function()
+    local w = uiWorld()
+    w.addon:InitializeUI()
+    w.addon:BuildMinimapButton()
+    H.eq(type(w.addon.IsLootMasterActive), "function", "predicate defined")
+    H.eq(type(w.addon.UpdateMinimapMLActive), "function", "updater defined")
+    H.notNil(w.addon.ui.minimapButton.icon, "icon kept on the button")
+
+    w.addon.roster.lootMasterName = nil
+    H.eq(w.addon:IsLootMasterActive(), false, "no loot master -> inactive")
+    w.addon:UpdateMinimapMLActive()
+
+    w.addon.roster.lootMasterName = "Masterlooter"
+    H.eq(w.addon:IsLootMasterActive(), true, "loot master resolved -> active")
+    w.addon:UpdateMinimapMLActive()
+    H.check(true, "UpdateMinimapMLActive ran through both states")
+end)
+
 F.endSuite()

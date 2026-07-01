@@ -408,6 +408,8 @@ end
 -- Options tab, whose widgets re-read state when that tab is selected.
 function addon:RefreshUI()
     self:UpdateMinimapOwedGlow()
+    self:UpdateMinimapTradeStatus()
+    self:UpdateMinimapMLActive()
     if not self.ui or not self.ui.frame then
         return
     end

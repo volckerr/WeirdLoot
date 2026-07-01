@@ -80,8 +80,26 @@ function addon:OnLotUnlockedPayout(lot, winners)
     end
 end
 
-local function refreshMaster(self)
+-- Any change to the accepting-trades state (payout on/off, allow-all-trades on/off): repaint the
+-- master tab, refresh the local minimap warning, and push the new flag to raiders. The broadcast is
+-- a forced full snapshot (the accepting-trades flag rides the "M" meta line, which deltas omit);
+-- AutoBroadcastSession no-ops when no session is active, so this is safe to call unconditionally.
+local function onPayoutStateChanged(self)
     if self.ui and self.ui.masterPanel then self:RefreshMasterTab() end
+    if self.UpdateMinimapTradeStatus then self:UpdateMinimapTradeStatus() end
+    self:AutoBroadcastSession(true)
+end
+
+-- True when owed winners can currently trade the loot master for their items: payout mode is on AND
+-- incoming trades are not being auto-declined. The ML computes this locally; a raider reads the last
+-- value the ML synced onto the session snapshot (defaulting to accepting, so a raider who has not yet
+-- received a snapshot never shows a false "closed" warning).
+function addon:IsLootMasterAcceptingTrades()
+    if self:IsAuthorizedLootMaster() then
+        return self.payout ~= nil and self.payout:IsPayoutActive() and self:IsAllowAllTrades()
+    end
+    if self._mlAcceptingTrades == nil then return true end
+    return self._mlAcceptingTrades
 end
 
 -- Loot master: whisper everyone still owed and turn on auto-fill.
@@ -102,7 +120,7 @@ function addon:StartPayout()
     else
         self:Print("Payout ON. No one owed yet; winners will be whispered as they're decided.")
     end
-    refreshMaster(self)
+    onPayoutStateChanged(self)
 end
 
 -- Pause: stop auto-fill but KEEP the owed list, so Start resumes where it left off.
@@ -110,7 +128,7 @@ function addon:StopPayout()
     if self.payout then
         self.payout:StopPayout()
         self:Print("Payout paused. Owed list kept; Start Payout again to resume.")
-        refreshMaster(self)
+        onPayoutStateChanged(self)
     end
 end
 
@@ -128,7 +146,7 @@ function addon:SetAllowAllTrades(allow)
     self:Print(allow
         and "All trades allowed."
         or "All incoming trades will be auto-declined.")
-    refreshMaster(self)
+    onPayoutStateChanged(self)
 end
 
 function addon:ToggleAllowAllTrades()
@@ -188,6 +206,7 @@ function addon:ResumePayoutMode()
         self:Print("Payout mode ON: re-whispered " .. sent .. " owed winner(s).")
     end
     if self.ui and self.ui.masterPanel then self:RefreshMasterTab() end
+    if self.UpdateMinimapTradeStatus then self:UpdateMinimapTradeStatus() end
 end
 
 function addon:TogglePayout()

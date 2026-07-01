@@ -322,7 +322,10 @@ end
 function addon:SyncBuildSnapshot(emit)
     local session = self:GetCurrentSession()
     local core = self.lootCore
-    emit({ "M", self:GetLootMasterName() or "", tostring(core.seq or 0) })
+    -- 4th field: the ML's accepting-trades flag, so raiders can show a "not accepting trades"
+    -- warning on the minimap button. Additive; older raiders ignore the extra field.
+    emit({ "M", self:GetLootMasterName() or "", tostring(core.seq or 0),
+        self:IsLootMasterAcceptingTrades() and "1" or "0" })
     for _, attendee in ipairs(session.attendees or {}) do
         emit({ "A", attendee.name or "", attendee.className or "", attendee.specName or "", attendee.status or "nil" })
     end
@@ -354,6 +357,8 @@ function addon:SyncApplySnapshot(lines, epoch)
             local mlName = f[2]
             if mlName and mlName ~= "" then self.roster.lootMasterName = mlName end
             seq = math.max(seq, tonumber(f[3]) or 0)
+            -- A missing 4th field (older ML) defaults to accepting, so we never warn on stale data.
+            self._mlAcceptingTrades = (f[4] == nil) or (f[4] == "1")
         elseif tag == "A" then
             self.session.attendees[#self.session.attendees + 1] = {
                 name = f[2], className = f[3], specName = f[4], status = f[5],
@@ -366,6 +371,10 @@ function addon:SyncApplySnapshot(lines, epoch)
         end
     end
     self.lootCore:ApplyRemote({ seq = seq, lots = lots })
+    -- reflect the ML's freshly-synced accepting-trades flag + loot-master presence (guarded: the
+    -- minimap UI may not be loaded)
+    if self.UpdateMinimapTradeStatus then self:UpdateMinimapTradeStatus() end
+    if self.UpdateMinimapMLActive then self:UpdateMinimapMLActive() end
 end
 
 -- Host delta applier (raider): one lot upsert.
