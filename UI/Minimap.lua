@@ -63,19 +63,23 @@ function addon:BuildMinimapButton()
     overlay:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
     overlay:SetPoint("TOPLEFT", button, "TOPLEFT", 0, 0)
 
-    local icon = button:CreateTexture(nil, "ARTWORK")
+    -- BORDER layer (below ARTWORK) so the not-accepting-trades X, which lives on ARTWORK, draws
+    -- cleanly ABOVE the icon. Same-layer ordering is creation-order and unreliable in 3.3.5a, so we
+    -- separate them by layer instead: icon (BORDER) < X (ARTWORK) < tracking border (OVERLAY).
+    local icon = button:CreateTexture(nil, "BORDER")
     icon:SetWidth(20)
     icon:SetHeight(20)
     icon:SetTexture("Interface\\AddOns\\WeirdLoot\\Textures\\weirdloot")
     icon:SetPoint("TOPLEFT", button, "TOPLEFT", 7, -6)
     icon:SetTexCoord(0, 1, 0, 1)
+    button.icon = icon   -- kept so UpdateMinimapMLActive can desaturate it when no ML is in play
 
     local highlight = button:CreateTexture(nil, "HIGHLIGHT")
     highlight:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     highlight:SetBlendMode("ADD")
     highlight:SetAllPoints(button)
 
-    button:SetScript("OnClick", function(_, mouseButton)
+    button:SetScript("OnClick", function(selfBtn, mouseButton)
         -- Owed raiders: a LEFT-click drives the whole delivery in two presses and never opens the window
         -- (use a right-click for that). First press opens the trade with the loot master (their side
         -- auto-fills the owed loot); a second press, once the trade window is up, ACCEPTS it. AcceptTrade
@@ -99,6 +103,20 @@ function addon:BuildMinimapButton()
             return   -- owed left-click is trade-only; do NOT fall through to the window toggle
         end
 
+        -- Loot master mirror of the owed-raider left-click: while a session is live, a LEFT-click
+        -- toggles incoming trades (auto-decline on/off) instead of toggling the window. The window is
+        -- still one right-click away. Payout mode is untouched -- that lives on the master tab.
+        if mouseButton == "LeftButton" and addon:IsAuthorizedLootMaster() then
+            local session = addon:GetCurrentSession()
+            if session and session.active then
+                addon:ToggleAllowAllTrades()
+                -- the pointer is still over the button, so rebuild the (already-open) tooltip in place
+                -- to reflect the flipped state; otherwise it stays stale and the ML misses the change.
+                if GameTooltip:IsOwned(selfBtn) then selfBtn:GetScript("OnEnter")(selfBtn) end
+                return
+            end
+        end
+
         -- Right-click, or a left-click with nothing owed: toggle the window. Opening with loot owed jumps
         -- straight to Loot Results; otherwise open the last-used tab. Read the remembered tab (db) for the
         -- non-owed case so a prior owed jump (which uses a transient select) never becomes the "last" tab.
@@ -118,10 +136,28 @@ function addon:BuildMinimapButton()
         GameTooltip:SetPoint("TOPRIGHT", selfBtn, "BOTTOMLEFT", 0, 0)
         GameTooltip:AddLine("WeirdLoot " .. tostring(addon.version or "?"), 1, 0.82, 0)
 
+        if not addon:IsLootMasterActive() then
+            GameTooltip:AddLine("No active loot master", 0.6, 0.6, 0.6)
+        end
+
+        if addon:ShouldWarnMLNotAcceptingTrades() then
+            GameTooltip:AddLine("ML is not accepting trades", 1, 0.2, 0.2)
+        end
+
         local owed = addon:GetLootOwedToMe()
         local ml = addon:GetLootMasterName()
+        local session = addon:GetCurrentSession()
         local canTrade = owed and #owed > 0 and ml and ml ~= "" and not addon:IsAuthorizedLootMaster()
-        if canTrade then
+        local mlManagesTrades = addon:IsAuthorizedLootMaster() and session and session.active
+        if mlManagesTrades then
+            -- the loot master's left-click toggles incoming trades; the window is a right-click.
+            if addon:IsAllowAllTrades() then
+                GameTooltip:AddLine("Left-click to decline incoming trades.", 0.6, 1, 0.6)
+            else
+                GameTooltip:AddLine("Left-click to allow incoming trades.", 0.6, 1, 0.6)
+            end
+            GameTooltip:AddLine("Right-click to toggle the main window.", 0.8, 0.8, 0.8)
+        elseif canTrade then
             -- when owed, the click trades the ML for your loot; show that instead of the toggle/reposition
             -- hints, for compactness. Color the ML name by their class.
             local mlName = ml
@@ -194,6 +230,20 @@ function addon:BuildMinimapButton()
     end
     self.ui.minimapShine = shine
 
+    -- "ML is not accepting trades" warning: a red X over the button, shown while a session is live
+    -- but the loot master has payout off or is auto-declining trades. On the ARTWORK layer, which sits
+    -- ABOVE the icon (dropped to BORDER for this) and BELOW the OVERLAY tracking border, so the X
+    -- nestles inside the button's rim over the icon. Layer separation, not same-layer creation order,
+    -- is what guarantees this (3.3.5a has no draw-sublevel arg).
+    local tradeX = button:CreateTexture(nil, "ARTWORK")
+    tradeX:SetTexture(READY_CHECK_NOT_READY_TEXTURE)   -- stock ready-check red X (Interface\RaidFrame\ReadyCheck-NotReady)
+    tradeX:SetWidth(24)
+    tradeX:SetHeight(24)
+    tradeX:SetPoint("CENTER", button, "CENTER", 0.5, 0)
+    tradeX:SetAlpha(0.8)
+    tradeX:Hide()
+    button.tradeX = tradeX
+
     positionMinimapButton(button)
 
     local opt = getOptions(self)
@@ -203,6 +253,33 @@ function addon:BuildMinimapButton()
         button:Show()
     end
     self:UpdateMinimapOwedGlow()
+    self:UpdateMinimapTradeStatus()
+    self:UpdateMinimapMLActive()
+end
+
+-- The loot master is not currently accepting trades (payout off or incoming trades auto-declined)
+-- while a session is live. Only meaningful during a session: no warning when nothing is being looted.
+function addon:ShouldWarnMLNotAcceptingTrades()
+    local session = self:GetCurrentSession()
+    if not (session and session.active) then return false end
+    return not self:IsLootMasterAcceptingTrades()
+end
+
+function addon:UpdateMinimapTradeStatus()
+    local btn = self.ui and self.ui.minimapButton
+    if not btn or not btn.tradeX then return end
+    if self:ShouldWarnMLNotAcceptingTrades() then
+        btn.tradeX:Show()
+    else
+        btn.tradeX:Hide()
+    end
+end
+
+-- Grey out the minimap icon while no loot master is in play, so WeirdLoot reads as idle at a glance.
+function addon:UpdateMinimapMLActive()
+    local btn = self.ui and self.ui.minimapButton
+    if not btn or not btn.icon then return end
+    btn.icon:SetDesaturated(not self:IsLootMasterActive())
 end
 
 -- Copies the local player has won but not yet received, from the (raider-mirrored) ledger.

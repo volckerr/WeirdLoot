@@ -240,6 +240,14 @@ function addon:GetLootMasterName()
     return self.roster.lootMasterName
 end
 
+-- Is there a loot master in play at all? True when the group is on master loot with a resolved ML
+-- (or a session snapshot has named one). False means no one is managing loot -- the minimap icon
+-- desaturates to signal WeirdLoot is idle.
+function addon:IsLootMasterActive()
+    local ml = self.roster.lootMasterName
+    return ml ~= nil and ml ~= ""
+end
+
 -- The master looter's UNIT token, straight from the loot method. 3.3.5a can't target by name from addon
 -- code (TargetByName removed, TargetUnit protected), but InitiateTrade / UnitClass take a unit, so this
 -- is how we trade or read the ML. nil unless the group is on master loot.
