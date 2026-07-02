@@ -275,11 +275,13 @@ function addon:UpdateMinimapTradeStatus()
     end
 end
 
--- Grey out the minimap icon while no loot master is in play, so WeirdLoot reads as idle at a glance.
+-- Grey out the minimap icon while in a raid with no loot master in play, so WeirdLoot reads as idle
+-- at a glance. Only in a raid: outside one there is nothing to coordinate, so the icon stays normal.
 function addon:UpdateMinimapMLActive()
     local btn = self.ui and self.ui.minimapButton
     if not btn or not btn.icon then return end
-    btn.icon:SetDesaturated(not self:IsLootMasterActive())
+    local inRaid = (GetNumRaidMembers() or 0) > 0
+    btn.icon:SetDesaturated(inRaid and not self:IsLootMasterActive())
 end
 
 -- Copies the local player has won but not yet received, from the (raider-mirrored) ledger.
