@@ -34,7 +34,7 @@
 --   * Authority TIMING is the host's concern: RequestSync no-ops without a resolved authority;
 --     the host re-requests when its authority appears (the lib never polls for one).
 
-local MAJOR, MINOR = "WeirdSync-1.0", 1
+local MAJOR, MINOR = "WeirdSync-1.0", 2
 assert(LibStub, MAJOR .. " requires LibStub")
 local WeirdSync = LibStub:NewLibrary(MAJOR, MINOR)
 if not WeirdSync then return end -- already loaded a newer or equal version
@@ -131,6 +131,13 @@ function Channel:Broadcast(force)
     end
     self:_sendDeltas(pending)
     self._pending = {}
+end
+
+-- Peer: forget the in-flight request. For a host that stopped receiving for a while (a disable
+-- toggle drops inbound traffic, so the answer never arrived): the next RequestSync then sends fresh
+-- instead of waiting out the retry backoff.
+function Channel:AbandonRequest()
+    self.pendingRequest = nil
 end
 
 -- internal: mint and send a request to a known authority, marking it in-flight for Tick.

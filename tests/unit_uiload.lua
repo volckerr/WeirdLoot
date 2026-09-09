@@ -28,6 +28,40 @@ H.test("UI files load and define the expected entry points", function()
     end
 end)
 
+H.test("toggle: minimap Shift+Right-click flips the flag in place; tooltip and Options track it", function()
+    local w = uiWorld()
+    w.addon:InitializeUI()
+    w.env.ReloadUI = function() error("must not reload") end
+    local btn = w.env.WeirdLootMinimapButton
+    H.notNil(btn, "minimap button built")
+    H.eq(w.addon.ui.optionsPanel.disabledWarning.__shown, false, "warning hidden on a fresh enabled build")
+    local lines = {}
+    w.env.GameTooltip.AddLine = function(_, text) lines[#lines + 1] = text end
+    btn:GetScript("OnEnter")(btn)
+    local hint = false
+    for _, l in ipairs(lines) do if l:find("Shift+Right-click to disable", 1, true) then hint = true end end
+    H.eq(hint, true, "enabled tooltip carries the disable hint")
+
+    w.env.IsShiftKeyDown = function() return true end
+    btn:GetScript("OnClick")(btn, "RightButton")
+    H.eq(w.addon:IsDisabled(), true, "disabled")
+    H.eq(btn.tradeX.__shown, true, "red X shown while off")
+    local panel = w.addon.ui.optionsPanel
+    H.eq(panel.disableBtn.__text, "Enable WeirdLoot", "Options button offers Enable")
+    H.eq(panel.disabledWarning.__shown, true, "Options warning shown")
+    lines = {}
+    btn:GetScript("OnEnter")(btn)
+    local warned = false
+    for _, l in ipairs(lines) do if l:find("DISABLED", 1, true) then warned = true end end
+    H.eq(warned, true, "disabled tooltip states it")
+
+    panel.disableBtn:GetScript("OnClick")()
+    H.eq(w.addon:IsDisabled(), false, "Options button re-enabled")
+    H.eq(panel.disableBtn.__text, "Disable WeirdLoot", "button label back")
+    H.eq(btn.tradeX.__shown, false, "red X hidden again")
+    H.eq(panel.disabledWarning.__shown, false, "warning hidden")
+end)
+
 -- Minimap button placement: shape-aware orbit (LibDBIcon math), Shift+Right-drag detach, re-attach.
 local function minimapWorld()
     local w = uiWorld()

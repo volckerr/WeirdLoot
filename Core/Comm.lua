@@ -78,7 +78,10 @@ function addon:InitializeComm()
         -- seconds apart and time() never resets), so a raider can tell an ML that just reloaded (rev back
         -- to 0, same session epoch) from a stale message, and rebaselines instead of rejecting it.
         nonce          = tostring((time and time()) or (GetTime and GetTime()) or 0),
-        send           = function(value, dist, target, prio) self.comm:Send(value, dist, target, prio) end,
+        send           = function(value, dist, target, prio)
+            if self:IsDisabled() then return end
+            self.comm:Send(value, dist, target, prio)
+        end,
         isAuthority    = function() return self:IsAuthorizedLootMaster() end,
         authorityName  = function() return self:GetLootMasterName() end,
         rosterContains = function(name) return isInRaid(name) end,
@@ -114,7 +117,7 @@ end
 -- the normName check here also covers a realm-suffixed echo. Sync tags go to WeirdSync; the rest are
 -- live-roll messages.
 function addon:RouteComm(value, sender, distribution)
-    if type(value) ~= "table" then return end
+    if type(value) ~= "table" or self:IsDisabled() then return end
     if util:NormalizeKey(util:GetPlayerName("player") or "") == util:NormalizeKey(sender or "") then return end
     if SYNC_TAGS[value[1]] then
         self.syncChannel:OnReceive(sender, value)
@@ -127,7 +130,7 @@ end
 -- channel over SendAddonMessage (no manual string codec, no separate addon-channel lane). Args are
 -- stringified to preserve the string semantics the handlers were written against.
 function addon:SendLargeMessage(command, values, distribution, target, prio)
-    if not self.comm then return end
+    if not self.comm or self:IsDisabled() then return end
     local value = { command }
     for _, v in ipairs(values or {}) do value[#value + 1] = tostring(v) end
     self.comm:Send(value, distribution, target, prio or "BULK")

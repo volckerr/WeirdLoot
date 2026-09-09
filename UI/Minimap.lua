@@ -158,6 +158,7 @@ function addon:BuildMinimapButton()
     icon:SetPoint("TOPLEFT", button, "TOPLEFT", 7, -6)
     icon:SetTexCoord(0, 1, 0, 1)
     button.icon = icon   -- kept so UpdateMinimapMLActive can desaturate it when no ML is in play
+    if addon:IsDisabled() then icon:SetDesaturated(true) end   -- greyed while the toggle is off
 
     local highlight = button:CreateTexture(nil, "HIGHLIGHT")
     highlight:SetTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
@@ -165,6 +166,18 @@ function addon:BuildMinimapButton()
     highlight:SetAllPoints(button)
 
     button:SetScript("OnClick", function(selfBtn, mouseButton)
+        -- Live toggle (both directions): the modifier keeps it off the plain-click paths below.
+        if mouseButton == "RightButton" and IsShiftKeyDown() then
+            addon:SetDisabled(not addon:IsDisabled())
+            if GameTooltip:IsOwned(selfBtn) then selfBtn:GetScript("OnEnter")(selfBtn) end
+            return
+        end
+        -- Disabled: no trade/attention shortcuts; a click just toggles the window.
+        if addon:IsDisabled() then
+            addon:ToggleMainFrame()
+            return
+        end
+
         -- Attention state: the button is an alarm, so the click is the shortcut to the fix --
         -- a LEFT-click jumps straight to the Roster tab. Outranks the owed-trade and
         -- trade-toggle left-clicks while red (those resume once the roster is clean); the
@@ -234,6 +247,13 @@ function addon:BuildMinimapButton()
         GameTooltip:ClearAllPoints()
         GameTooltip:SetPoint("TOPRIGHT", selfBtn, "BOTTOMLEFT", 0, 0)
         GameTooltip:AddLine("WeirdLoot " .. tostring(addon.version or "?"), 1, 0.82, 0)
+        if addon:IsDisabled() then
+            GameTooltip:AddLine("DISABLED on this character: no loot handling, sync or trades.", 1, 0.25, 0.25)
+            GameTooltip:AddLine("Shift+Right-click to enable.", 0.6, 1, 0.6)
+            GameTooltip:AddLine("Click to toggle the main window.", 0.8, 0.8, 0.8)
+            GameTooltip:Show()
+            return
+        end
 
         if not addon:IsLootMasterActive() then
             GameTooltip:AddLine("No active loot master", 0.6, 0.6, 0.6)
@@ -298,6 +318,7 @@ function addon:BuildMinimapButton()
             GameTooltip:AddLine("Click to toggle the main window.", 1, 1, 1)
             GameTooltip:AddLine("Right-drag to reposition; Shift+Right-drag to detach it.", 0.8, 0.8, 0.8)
         end
+        GameTooltip:AddLine("Shift+Right-click to disable WeirdLoot on this character.", 0.8, 0.8, 0.8)
 
         if owed and #owed > 0 then
             GameTooltip:AddLine(" ")
@@ -398,10 +419,12 @@ function addon:ShouldWarnMLNotAcceptingTrades()
     return not self:IsLootMasterAcceptingTrades()
 end
 
+-- The X also marks the addon toggled off (with the greyed icon): both mean "WeirdLoot is not
+-- handling loot right now", so one glyph serves both.
 function addon:UpdateMinimapTradeStatus()
     local btn = self.ui and self.ui.minimapButton
     if not btn or not btn.tradeX then return end
-    if self:ShouldWarnMLNotAcceptingTrades() then
+    if self:IsDisabled() or self:ShouldWarnMLNotAcceptingTrades() then
         btn.tradeX:Show()
     else
         btn.tradeX:Hide()
@@ -414,7 +437,7 @@ function addon:UpdateMinimapMLActive()
     local btn = self.ui and self.ui.minimapButton
     if not btn or not btn.icon then return end
     local inRaid = (GetNumRaidMembers() or 0) > 0
-    btn.icon:SetDesaturated(inRaid and not self:IsLootMasterActive())
+    btn.icon:SetDesaturated(self:IsDisabled() or (inRaid and not self:IsLootMasterActive()))
 end
 
 -- Copies the local player has won but not yet received, from the (raider-mirrored) ledger.
