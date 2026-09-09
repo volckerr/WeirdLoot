@@ -305,6 +305,15 @@ function addon:RefreshLootAuthority()
 
     local wasLootMaster = self.roster.isLootMaster
     local prevMasterName = self.roster.lootMasterName
+
+    -- FRESH-SESSION PROMPT (Session.lua): on the false->true transition ask whether the still-active
+    -- session belongs to this raid, and stay non-authoritative until answered. The roster still
+    -- names us, so every reader sees who the ML is; only IsAuthorizedLootMaster is withheld.
+    if isLootMaster and not wasLootMaster and not self._mlPromptAnswering
+        and self:ShouldPromptFreshSessionOnML(loan) then
+        self:PromptFreshSessionOnML()
+    end
+    if self._mlPromptPending then isLootMaster = false end
     self.roster.lootMasterName = lootMasterName
     self.roster.isLootMaster = isLootMaster
     self.roster.mlRosterUnreadable = self:RosterUnreadableForML(method, partyMasterIndex, raidMasterIndex, nameAtML)
@@ -344,7 +353,7 @@ function addon:RefreshLootAuthority()
     -- loaded a beat after a fresh login -- must pull the session at once. Without this it sits idle
     -- until the ML's next heartbeat (up to the ~30s heartbeat period) reveals it is behind. Only the
     -- nil/changed transition fires it, so steady re-resolves on roster churn do not re-request.
-    if not isLootMaster and lootMasterName and lootMasterName ~= ""
+    if not isLootMaster and lootMasterName and lootMasterName ~= "" and not self._mlPromptPending
         and util:NormalizeKey(lootMasterName) ~= util:NormalizeKey(prevMasterName or "") then
         self:RequestSessionSync()
     end
@@ -389,7 +398,7 @@ function addon:RosterUnreadableForML(method, partyMasterIndex, raidMasterIndex, 
 end
 
 function addon:IsAuthorizedLootMaster()
-    return self.roster.isLootMaster
+    return self.roster.isLootMaster and not self:IsDisabled()   -- disabled: never act as the ML
 end
 
 -- Roster-edit authority: guild leadership (officer ranks) ONLY. Deliberately narrower than

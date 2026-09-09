@@ -436,10 +436,67 @@ function addon:AssumeLootMasterSession()
     if not self._mirrorActive then return end          -- not a live mirror: do not rebroadcast stale loot
     self.session.id = self:NextEpoch()
     self.session.ownerKey = self:GetSessionOwnerKey()
+    self.session.startedAt = time()                    -- our tenure starts now (shown by the ML prompt)
     self.lootCore:SaveTo(self.session)
     self:AutoBroadcastSession(true)                    -- full snapshot at the new epoch; raiders rebaseline
     self:TriggerCallback("SESSION_UPDATED")
     self:Print("Loot master role assumed; continuing the active loot session.")
+end
+
+-- FRESH-SESSION PROMPT. Resolving as loot master while a session is still active on disk is the
+-- handoff trap: the ML forgets to start fresh, master loot lands on them, and an earlier raid's
+-- ledger and owes carry into this one. The addon cannot tell a new raid from a mid-raid reload
+-- (3.3.5a has no group identity that survives a relog, and the authority flag starts false on
+-- every load), so it asks EVERY time it resolves to ML, reloads included, and holds authority
+-- until the answer: nothing is broadcast, reconciled, or paid out on a session the ML has not
+-- yet vouched for. Skipped when the addon already knows the session is this raid's: a live
+-- mirror received on the wire this play-session (the mid-raid handoff, continued as-is), or an
+-- ML loan's role swap. Ungrouped resolves (solo test mode) have nothing to ask about.
+function addon:ShouldPromptFreshSessionOnML(loan)
+    if self._mlPromptPending or loan or self._mirrorActive then return false end
+    if not self.session or not self.session.active then return false end
+    return (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0
+end
+
+local function ago(seconds)
+    if seconds < 3600 then return math.floor(seconds / 60) .. "m" end
+    if seconds < 86400 then return math.floor(seconds / 3600) .. "h" end
+    return math.floor(seconds / 86400) .. "d " .. math.floor((seconds % 86400) / 3600) .. "h"
+end
+
+-- Show the prompt and hold authority. Returns false when the client could not show it (no free
+-- popup slot, or dead without whileDead): then there is nothing to wait on and authority lands as
+-- usual, exactly as before this prompt existed.
+function addon:PromptFreshSessionOnML()
+    local s = self.session
+    local started = s.startedAt and ("started " .. ago(time() - s.startedAt) .. " ago") or "start time unknown"
+    local items = self.lootCore and #self.lootCore:All() or 0
+    local owes = (self.payout and self.payout:HasOwed()) and ", owes still open" or ""
+    local detail = string.format("%s, %d item%s%s", started, items, items == 1 and "" or "s", owes)
+    if not StaticPopup_Show("WEIRDLOOT_FRESH_SESSION_ON_ML", detail) then return false end
+    self._mlPromptPending = true
+    self:LogCoreEvent("ml-prompt", { state = "shown", epoch = s.id })
+    return true
+end
+
+-- The popup's single exit. Every dismissal (No, Escape, override, timeout, a programmatic hide)
+-- means Keep; only the Start Fresh button passes true. Idempotent: the second call from the
+-- dialog's own OnHide after a click is a no-op.
+function addon:AnswerFreshSessionOnML(fresh)
+    if not self._mlPromptPending then return end
+    self._mlPromptPending = nil
+    self:LogCoreEvent("ml-prompt", { state = fresh and "fresh" or "keep" })
+    -- Re-resolve with the prompt disarmed: authority lands now (the roster still names us). Keep runs
+    -- the deferred ML-on-login work (snapshot broadcast, payout resume, pending popups) through the
+    -- recheck path; Fresh starts the new session, which does its own broadcast and payout.
+    self._mlPromptAnswering = true
+    if fresh then
+        self:RefreshLootAuthority()
+        self:StartLootSession()
+    else
+        self:RecheckLootAuthority()
+    end
+    self._mlPromptAnswering = nil
 end
 
 function addon:StartLootSession()
@@ -676,7 +733,7 @@ end
 
 function addon:OnBagUpdate()
     local session = self:GetCurrentSession()
-    if not session.active then
+    if not session.active or self:IsDisabled() then
         return false
     end
     -- Only the ML reconciles bag reality into the ledger; raiders mirror via the snapshot.
