@@ -2503,6 +2503,16 @@ test("roll block: the Archivum Data Disc is blocked once you hold the Celestial 
     eq(w.addon:RollSelfBlockReason(45857), "quest", "holding the heroic key blocks the 25-man disc")
 end)
 
+test("roll block: Reply-Code Alpha is blocked once you hold ANY of its four choice rewards", function()
+    local w = makeWorld("Saelinen", false)
+    eq(w.addon:RollSelfBlockReason(46052), nil, "10-man code not blocked before the quest")
+    w.env.__equipped[15] = 46321                    -- wearing Sunglimmer Drape (a 10-man choice)
+    eq(w.addon:RollSelfBlockReason(46052), "quest", "a worn 10-man choice reward blocks the 10-man code")
+    eq(w.addon:RollSelfBlockReason(46053), nil, "25-man code unaffected by the 10-man reward")
+    w.env.__bank[45608] = 1                         -- Brann's Signet Ring in the bank (a 25-man choice)
+    eq(w.addon:RollSelfBlockReason(46053), "quest", "a banked 25-man choice reward blocks the 25-man code")
+end)
+
 -- ===========================================================================
 -- ADVERSARIAL / FAILURE-MODE cases (where things break, by design or as a known gap)
 -- ===========================================================================
@@ -3258,6 +3268,192 @@ test("handoff: a previous ML's self-won item does not mask the new ML's fresh dr
     check(B.addon.lootCore:Get(won.id) ~= nil, "A's resolved lot is still kept as the loot log")
 end)
 
+
+-- ===========================================================================
+-- fresh-session prompt on resolving as ML: asked every time (reloads included) while a session is
+-- active; authority is HELD until answered. Skips: live mirror, ML loan, ungrouped, no session.
+-- ===========================================================================
+
+-- The raid's loot method points at raid index 1; make the roster name US there and re-resolve.
+-- Returns the popup capture: nil when no dialog was shown.
+local function engageML(w)
+    local me = w.env.UnitName("player")
+    w.env.GetRaidRosterInfo = function(i) return me, (i == 1) and 2 or 0 end
+    local shown
+    w.env.StaticPopup_Show = function(which, arg1) shown = { which = which, arg1 = arg1 }; return {} end
+    w.addon:RefreshLootAuthority()
+    return shown
+end
+
+local function leftover(w, ageSeconds)
+    w.addon.session.active = true
+    w.addon.session.id = "5"
+    w.addon:ObserveEpoch("5")
+    w.addon.session.startedAt = ageSeconds and (F.CLOCK - ageSeconds) or nil
+    w.addon._mirrorActive = false
+end
+
+local function dialog(w) return w.env.StaticPopupDialogs["WEIRDLOOT_FRESH_SESSION_ON_ML"] end
+
+test("ml-prompt: resolving as ML with an active session asks, and withholds authority until answered", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 2 * 86400 + 3 * 3600)
+    local shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "prompt shown")
+    check(shown.arg1:find("2d 3h", 1, true), "detail names the session age (" .. tostring(shown.arg1) .. ")")
+    eq(w.addon:IsAuthorizedLootMaster(), false, "not the authority while the prompt is open")
+    eq(w.addon.roster.lootMasterName, "Promotee", "the roster still names us as ML")
+    clearWire()
+    w.addon:RefreshLootAuthority()                           -- retry-loop re-resolves do not re-ask
+    w.addon:RecheckLootAuthority()
+    eq(#F.WIRE, 0, "nothing broadcast while held")
+    eq(w.addon.session.id, "5", "session untouched while held")
+end)
+
+test("ml-prompt: Keep lands authority and runs the deferred snapshot broadcast", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    clearWire()
+    dialog(w).OnCancel()                                     -- No / Escape / override all route here
+    dialog(w).OnHide()                                       -- the dialog's own hide after the click: inert
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
+    eq(w.addon.session.id, "5", "session kept")
+    local snaps = 0
+    for _, m in ipairs(F.WIRE) do if m.value and m.value[1] == "SNAP" then snaps = snaps + 1 end end
+    check(snaps > 0, "the held snapshot broadcast went out on Keep")
+end)
+
+test("ml-prompt: Start Fresh lands authority and starts a new session", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 7 * 86400)
+    engageML(w)
+    dialog(w).OnAccept()
+    dialog(w).OnHide()
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
+    check(tonumber(w.addon.session.id) > 5, "a new epoch was minted (got " .. tostring(w.addon.session.id) .. ")")
+    check(w.addon.session.active, "fresh session active")
+    eq(w.addon.session.startedAt, F.CLOCK, "fresh start stamped now")
+end)
+
+test("ml-prompt: losing and regaining ML asks again (every time, not once per load)", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w); dialog(w).OnCancel()
+    w.env.GetRaidRosterInfo = function(i) return (i == 1) and "Masterlooter" or "Promotee", 0 end
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), false, "ML moved away")
+    local shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "asked again on the second gain")
+end)
+
+test("ml-prompt: no active session = no prompt, authority lands at once", function()
+    local w = makeWorld("Promotee", false)
+    local shown = engageML(w)
+    eq(shown, nil, "no prompt")
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
+end)
+
+test("ml-prompt: ungrouped (solo test mode) never asks", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 7 * 86400)
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.env.GetNumPartyMembers = function() return 0 end
+    w.env.GetLootMethod = function() return "freeforall" end
+    w.addon.db.testMode = true
+    w.env.IsPartyLeader = function() return true end
+    local shown
+    w.env.StaticPopup_Show = function(which) shown = which; return {} end
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), true, "test-mode authority")
+    eq(shown, nil, "no prompt while ungrouped")
+end)
+
+test("ml-prompt: an ML loan's role swap never asks", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 7 * 86400)
+    w.addon.session.mlLoan = { owner = "Promotee", borrower = "Masterlooter", itemId = 40001 }
+    local shown
+    w.env.StaticPopup_Show = function(which) shown = which; return {} end
+    w.addon:RefreshLootAuthority()                           -- the pin resolves the owner as ML
+    eq(w.addon:IsAuthorizedLootMaster(), true, "loan owner is the authority")
+    eq(shown, nil, "no prompt under a loan")
+end)
+
+test("ml-prompt: a live mirror is this raid's session: no prompt, handoff continues it", function()
+    local ml = makeWorld("Masterlooter", true)
+    local promotee = makeWorld("Promotee", false)
+    startSession(ml)
+    setBag(ml, 40001, 1); bagUpdate(ml)
+    flushWireTo(promotee, "Masterlooter")
+    local mirrored = #promotee.addon.lootCore:All()
+    check(mirrored > 0, "promotee mirrored the lot(s)")
+    local shown = engageML(promotee)
+    eq(shown, nil, "no prompt over a live mirror")
+    eq(promotee.addon:IsAuthorizedLootMaster(), true, "authority landed")
+    eq(#promotee.addon.lootCore:All(), mirrored, "ledger continued")
+end)
+
+test("ml-prompt: when the client cannot show the dialog, authority lands as before", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 7 * 86400)
+    local me = w.env.UnitName("player")
+    w.env.GetRaidRosterInfo = function(i) return me, (i == 1) and 2 or 0 end
+    w.env.StaticPopup_Show = function() return nil end       -- no free popup slot
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), true, "no hold without a dialog")
+    eq(w.addon.session.id, "5", "session kept")
+end)
+
+-- ===========================================================================
+-- per-character live toggle: while disabled the addon ignores events, comm and trades and never acts
+-- as the ML; enabling re-syncs in place (no reload).
+-- ===========================================================================
+
+test("disabled: a disabled login loads everything but acts on nothing; enabling catches up in place", function()
+    local w = makeWorld("Masterlooter", true, { WeirdLootCharDB = { options = { disabled = true } } })
+    eq(w.addon:IsDisabled(), true, "flag restored from the per-character DB")
+    check(w.addon.comm ~= nil and w.addon.payout ~= nil, "comm and payout still built")
+    eq(w.addon:IsAuthorizedLootMaster(), false, "never the authority while disabled")
+    w.env.ReloadUI = function() error("must not reload") end
+    w.addon:SetDisabled(false)
+    eq(w.addon:IsDisabled(), false, "flag cleared")
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority back after the catch-up")
+end)
+
+test("disabled: toggling off mid-session stops loot pickup and broadcasts; toggling on picks the drop up", function()
+    local ml = makeWorld("Masterlooter", true)
+    startSession(ml)
+    ml.addon:SetDisabled(true)
+    eq(ml.addon:IsAuthorizedLootMaster(), false, "not the authority while disabled")
+    clearWire()
+    setBag(ml, 40001, 1); bagUpdate(ml)
+    eq(#ml.addon.lootCore:All(), 0, "drop ignored while disabled")
+    eq(#F.WIRE, 0, "nothing sent while disabled")
+    ml.addon:SetDisabled(false)
+    check(#ml.addon.lootCore:All() > 0, "drop picked up on enable (zone-in catch-up)")
+    check(#F.WIRE > 0, "session broadcast resumed")
+end)
+
+test("disabled: a disabled raider ignores incoming sync and never trades", function()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raider", false)
+    startSession(ml)
+    setBag(ml, 40001, 1); bagUpdate(ml)
+    raider.addon:SetDisabled(true)
+    flushWireTo(raider, "Masterlooter")
+    eq(raider.addon.session.active, false, "snapshot dropped while disabled")
+    -- the engine's own event frame is wrapped: TRADE_SHOW never reaches it while disabled
+    raider.addon.payout.tradeOpen = nil
+    fireEvent(raider, "TRADE_SHOW")
+    eq(raider.addon.payout.tradeOpen, nil, "TRADE_SHOW ignored while disabled")
+    raider.addon:SetDisabled(false)                  -- catch-up asks the ML for the session...
+    flushWireTo(ml, "Raider")                        -- ...the ML answers...
+    flushWireTo(raider, "Masterlooter")              -- ...and the raider applies it
+    eq(raider.addon.session.active, true, "sync resumes on enable")
+    fireEvent(raider, "TRADE_SHOW")
+    eq(raider.addon.payout.tradeOpen, true, "trade events reach the engine again")
+end)
 
 -- ===========================================================================
 -- ORCHESTRATOR: run the unit suites, then report the whole battery.

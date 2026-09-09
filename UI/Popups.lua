@@ -11,6 +11,7 @@
 --   WEIRDLOOT_REROLL_ITEM             -- confirm before unlocking a resolved lot for re-roll
 --   WEIRDLOOT_END_SESSION             -- confirm before ending the current session
 --   WEIRDLOOT_START_SESSION           -- zone-in prompt when becoming ML with no session
+--   WEIRDLOOT_FRESH_SESSION_ON_ML     -- resolved as ML with a session still active: fresh or keep?
 --   WEIRDLOOT_RESTART_SESSION         -- confirm before restarting mid-session
 --
 -- see REFACTOR_PLAN.md Phase 3 for the planned dedupe of the 4 near-identical whitelist/blacklist
@@ -200,6 +201,23 @@ StaticPopupDialogs["WEIRDLOOT_START_SESSION"] = {
     button2 = NO,
     OnAccept = function() addon:StartLootSession() end,
     OnCancel = function() addon.raidPrompt.declined = true end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+    showAlert = 1,
+}
+
+-- Asked on EVERY resolve to loot master while a session is active (reloads included; see
+-- ShouldPromptFreshSessionOnML). Authority is held until answered. Every way out other than the
+-- Start Fresh button is Keep: OnCancel covers No, Escape, override and timeout; OnHide catches a
+-- programmatic hide. AnswerFreshSessionOnML is idempotent, so the OnHide after a click is inert.
+StaticPopupDialogs["WEIRDLOOT_FRESH_SESSION_ON_ML"] = {
+    text = "You are now the master looter.\n\nA WeirdLoot session is still active (%s).\n\nStart a fresh session for this raid, or keep it?",
+    button1 = "Start Fresh",
+    button2 = "Keep",
+    OnAccept = function() addon:AnswerFreshSessionOnML(true) end,
+    OnCancel = function() addon:AnswerFreshSessionOnML(false) end,
+    OnHide = function() addon:AnswerFreshSessionOnML(false) end,
     timeout = 0,
     whileDead = 1,
     hideOnEscape = 1,

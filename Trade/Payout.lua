@@ -42,6 +42,16 @@ function addon:InitializePayout()
         -- items -- even though InitializePayout runs on every client and the owe ledger persists.
         isActive = function() return addon:IsAuthorizedLootMaster() end,
     })
+    -- Live toggle gate: the engine owns its own TRADE_*/BAG_UPDATE frame, so wrap its handler here
+    -- rather than teaching the library about the addon's flag.
+    local frame = self.payout.frame
+    local onEvent = frame and frame:GetScript("OnEvent")
+    if onEvent then
+        frame:SetScript("OnEvent", function(...)
+            if addon:IsDisabled() then return end
+            return onEvent(...)
+        end)
+    end
 
     -- Owes are derived from the core's per-copy awards. A resolve adds owes for that lot's
     -- non-ML winners (whispered once if payout is live); an unlock retracts them. The ML

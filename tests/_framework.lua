@@ -113,7 +113,9 @@ end
 -- ---------------------------------------------------------------------------
 -- build a fresh mocked environment + load the addon into it
 -- ---------------------------------------------------------------------------
-function self.makeWorld(playerName, isML)
+-- globals: optional table placed into the world's env BEFORE PLAYER_LOGIN (e.g. a pre-existing
+-- WeirdLootCharDB), for tests of what login does with saved state.
+function self.makeWorld(playerName, isML, globals)
     local env = setmetatable({}, { __index = _G })
     env._G = env
     env.__onUpdates = {}    -- captured OnUpdate handlers, driven by pump()
@@ -489,6 +491,7 @@ function self.makeWorld(playerName, isML)
     addon.SetRollBannerCardChoice = function(_, key, bracket)
         addon._rollBannerChoices[#addon._rollBannerChoices + 1] = { key = key, bracket = bracket }
     end
+    for k, v in pairs(globals or {}) do env[k] = v end
     addon:PLAYER_LOGIN()
     if os.getenv("WLDEBUG") then env.WeirdLootDB.payoutDebug = true end
     local shippedDefaults = {

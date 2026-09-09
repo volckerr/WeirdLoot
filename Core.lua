@@ -112,6 +112,9 @@ installPresetRegistry("whitelist")
 installPresetRegistry("blacklist")
 
 local function onEvent(self, event, ...)
+    -- Live toggle: while disabled the addon ignores every game event (see IsDisabled). Login still
+    -- runs so state and the switches exist; SetDisabled(false) then catches up via PLAYER_ENTERING_WORLD.
+    if event ~= "PLAYER_LOGIN" and addon:IsDisabled() then return end
     if addon[event] then
         addon[event](addon, ...)
     end
@@ -179,6 +182,8 @@ function addon:PLAYER_LOGIN()
     -- self.db.options / self.db.ui unchanged. config + session stay account-wide (see PLAYER_LOGIN).
     WeirdLootCharDB = addon.util:EnsureDefaults(WeirdLootCharDB, {
         options = {
+            disabled = false,        -- per-character live toggle (see IsDisabled): everything stays loaded
+                                     -- but the addon observes, sends, trades, and acts on nothing
             resultPopupAutoCloseEnabled = true,
             resultPopupAutoCloseSeconds = 10,
             forceKeepResultPopup = true,   -- LM only: finished-loot winner popups stay open for the
@@ -357,6 +362,12 @@ function addon:PLAYER_LOGIN()
     self.events:RegisterEvent("GUILD_ROSTER_UPDATE")
     self:RequestGuildRoster()
 
+    if self:IsDisabled() then
+        -- Disabled: everything is loaded and wired, but nothing runs until the toggle flips (which
+        -- replays the zone-in catch-up). Skipping the refresh here keeps popups/whispers from firing.
+        self:Print("|cffff4040Disabled on this character.|r Shift+Right-click the minimap button or use Options to enable it.")
+        return
+    end
     self:RefreshAll()
     self:ResumePayoutMode()      -- a session restored from SavedVariables keeps payout mode on
     self:Print("Loaded. Use /weirdloot to open the window.")
@@ -365,6 +376,31 @@ end
 -- Zone-in prompt (RCLootCouncil model): on entering a raid instance as the loot
 -- master with no session running, offer to start one. Declining is remembered until
 -- we leave the raid, so it isn't re-asked on every loading screen inside the instance.
+
+-- Live per-character toggle. The gates: the event dispatcher (onEvent), comm receive (RouteComm) and
+-- both send paths, the payout engine's event frame (InitializePayout), OnBagUpdate (every reconcile
+-- trigger), the periodic tickers, and IsAuthorizedLootMaster (every act-as-ML path). No teardown:
+-- state is kept as-is while off and re-synced on enable.
+function addon:IsDisabled()
+    return self.db and self.db.options and self.db.options.disabled == true
+end
+
+function addon:SetDisabled(disabled)
+    self.db.options.disabled = disabled and true or false
+    if disabled then
+        self:Print("|cffff4040Disabled on this character.|r No loot handling, sync, trades or popups until enabled.")
+    else
+        self:Print("Enabled on this character.")
+        -- Any sync answer that arrived while disabled was dropped; forget the in-flight request so
+        -- the zone-in catch-up below asks the ML fresh instead of waiting out the retry backoff.
+        if self.syncChannel and self.syncChannel.AbandonRequest then self.syncChannel:AbandonRequest() end
+        self:PLAYER_ENTERING_WORLD()      -- the zone-in catch-up: roster, authority, sync/broadcast, prompts
+    end
+    if self.UpdateMinimapMLActive then self:UpdateMinimapMLActive() end
+    if self.UpdateMinimapTradeStatus then self:UpdateMinimapTradeStatus() end
+    if self.RefreshOptionsTab then self:RefreshOptionsTab() end
+    self:TriggerCallback("STATE_UPDATED")
+end
 
 function addon:MaybePromptStartSession()
     self.raidPrompt = self.raidPrompt or { declined = false }
@@ -388,6 +424,7 @@ local authRetry = CreateFrame("Frame")
 authRetry:Hide()
 authRetry:SetScript("OnUpdate", function(frame, dt)
     frame.elapsed = (frame.elapsed or 0) + dt
+    if addon:IsDisabled() then return end
     -- Fire a payout resume that deferred because bags were still loading; ResumePayoutMode no-ops
     -- until bags settle, then runs once (reconcile owes against bags, re-whisper). Cheap: a boolean
     -- in the common case, and this frame only runs in the ~15s login/zone window before it hides.
@@ -417,6 +454,7 @@ reconcileTicker:SetScript("OnUpdate", function(frame, dt)
     if frame.elapsed < RECONCILE_PERIOD then return end
     frame.elapsed = 0
     if InCombatLockdown and InCombatLockdown() then return end
+    if addon:IsDisabled() then return end
     addon:ReconcileLootNow()        -- no-op unless ML with an active session
 end)
 

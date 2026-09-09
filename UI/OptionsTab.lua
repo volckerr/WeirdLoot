@@ -56,6 +56,18 @@ function addon:BuildOptionsTab()
     titleDivider:SetPoint("TOPLEFT", panel.title, "BOTTOMLEFT", 0, -4)
     titleDivider:SetPoint("RIGHT", panel, "RIGHT", -40, 0)
 
+    -- Live toggle (the minimap button's Shift+Right-click is the other switch). Label and warning
+    -- track the flag in RefreshOptionsTab.
+    local disableBtn = createButton(panel, "Disable WeirdLoot", 130, 22)
+    disableBtn:SetPoint("TOPRIGHT", panel, "TOPRIGHT", -40, -8)
+    disableBtn:SetScript("OnClick", function() addon:SetDisabled(not addon:IsDisabled()) end)
+    local disabledWarning = createLabel(panel,
+        "|cffff4040DISABLED on this character: no loot handling, sync, trades or popups.|r",
+        "LEFT", panel.title, "RIGHT", 16, 0)
+    if self:IsDisabled() then disabledWarning:Show() else disabledWarning:Hide() end   -- a new fontstring is shown by default
+    panel.disableBtn = disableBtn
+    panel.disabledWarning = disabledWarning
+
     -- Two-column layout: left column = General + Loot Banner (per-raider display), right column =
     -- Loot Master; Loot Filters spans full width below. RCOL_X starts the right column; the divider
     -- right-edge offsets keep each column's rule within its own column.
@@ -458,6 +470,10 @@ function addon:RefreshOptionsTab()
     local inner = self.ui and self.ui.optionsPanel
     if not inner then return end
     local opt = (self.db and self.db.options) or {}
+    if inner.disableBtn then
+        inner.disableBtn:SetText(self:IsDisabled() and "Enable WeirdLoot" or "Disable WeirdLoot")
+        if self:IsDisabled() then inner.disabledWarning:Show() else inner.disabledWarning:Hide() end
+    end
     if inner.reattachBtn then
         if self:IsMinimapButtonDetached() then inner.reattachBtn:Enable() else inner.reattachBtn:Disable() end
     end
