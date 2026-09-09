@@ -39,6 +39,18 @@ addon.QUEST_GATED_MOB_DROPS = {
     [33692] = { label = "the Archivum Data Disc", items = { [2] = 45857 } }, -- Runemaster Molgeim (25)
 }
 
+-- Quest-gated GUARANTEED drops from a CHEST, keyed by the object's name. A chest is not a unit, so
+-- no token or GUID names it on 3.3.5a (no target, no "npc", no GetLootSourceInfo); the one signal is
+-- the world tooltip, whose first line is still the object's name when LOOT_OPENED fires (verified
+-- in-game on the Cache of Living Stone, autoloot on and off). Source: gameobject_loot_template
+-- (Chance=100 rows) via gameobject_template Data1.
+addon.QUEST_GATED_CHEST_DROPS = {
+    ["Gift of the Observer"] = {   -- Algalon, Ulduar (194821 / 194822)
+        label = "Reply-Code Alpha",
+        items = { [1] = 46052, [2] = 46053 },
+    },
+}
+
 -- Firm, local alert: red chat line + the raid-warning sound. The persistent signal lives on the
 -- banner cards themselves (the "On Corpse" side tag), so no center-screen text.
 function addon:LootAlert(text)
@@ -57,9 +69,14 @@ end
 -- Called at the top of AutoLoot's LOOT_OPENED (already gated: session active + we are the WoW ML),
 -- BEFORE any routing assigns, so the snapshot is the window's true pre-assign contents.
 function addon:ObserveLootOpened()
-    local corpseGuid
+    local corpseGuid, chestName
     if UnitExists and UnitExists("target") and UnitIsDead and UnitIsDead("target") then
         corpseGuid = UnitGUID and UnitGUID("target") or nil
+    else
+        -- ponytail: live tooltip read only; a cursor that left the chest before the window opened
+        -- reads nil (no warning). Add a CURSOR_UPDATE capture if that is ever seen in practice.
+        local fs = GameTooltipTextLeft1
+        chestName = fs and fs.GetText and fs:GetText() or nil
     end
     local slots = {}
     for slot = 1, GetNumLootItems() do
@@ -75,6 +92,7 @@ function addon:ObserveLootOpened()
     self.lootObs = {
         corpseGuid = corpseGuid,           -- nil for chests (no dead target to read)
         mobId = guidNpcId(corpseGuid),
+        chestName = chestName,             -- world-tooltip name when there is no corpse
         slots = slots,
         assigning = {},                    -- [slot] = pending-send info, set by TryPhantomSends
         open = true,
@@ -119,14 +137,21 @@ end
 -- ---------------------------------------------------------------------------
 
 -- Absence is decided at OPEN (loot slots never populate late), which is also the earliest moment
--- the fix (another looter, before despawn) can start. Warn once per corpse.
+-- the fix (another looter, before despawn) can start. Warn once per corpse; a chest has no GUID, so
+-- once per chest NAME this play-session (a raid cache is looted once per lockout).
 function addon:WarnMissingQuestDrops()
     local obs = self.lootObs
-    if not obs or not obs.mobId then return end
-    local entry = self.QUEST_GATED_MOB_DROPS[obs.mobId]
+    if not obs then return end
+    local entry, seenKey
+    if obs.mobId then
+        entry = self.QUEST_GATED_MOB_DROPS[obs.mobId]
+        seenKey = (obs.corpseGuid or "?") .. ":quest"
+    elseif obs.chestName then
+        entry = self.QUEST_GATED_CHEST_DROPS[obs.chestName]
+        seenKey = "chest:" .. obs.chestName .. ":quest"
+    end
     if not entry then return end
 
-    local seenKey = (obs.corpseGuid or "?") .. ":quest"
     if self._lootObsSeen[seenKey] then return end
     self._lootObsSeen[seenKey] = true
 
@@ -144,7 +169,7 @@ function addon:WarnMissingQuestDrops()
     end
     if present then return end
 
-    self:LootAlert("This kill always drops " .. entry.label .. ", but it is NOT in your loot. You likely cannot see it (quest already done). It rolls now; the winner picks it up via a master-loot loan.")
+    self:LootAlert((obs.chestName and "This chest" or "This kill") .. " always drops " .. entry.label .. ", but it is NOT in your loot. You likely cannot see it (quest already done). It rolls now; the winner picks it up via a master-loot loan.")
     -- Roll the invisible drop as a phantom. invisibleToML routes its resolve to the LOAN flow
     -- (the ML can never assign a slot they cannot see, so the corpse-send path is useless here).
     -- Local-only field: the owner's client decides the flavor; raiders roll it like any drop.
@@ -266,3 +291,4 @@ function addon:SetPhantomSendTarget(lotId, target)
     if self.lootObs and self.lootObs.open then self:TryPhantomSends() end
     if self.ShowPhantomSendCard then self:ShowPhantomSendCard(lotId) end
 end
+

@@ -1156,11 +1156,23 @@ addon.ROLL_REWARD_GATE = {
     -- but the server hides the disc from their loot anyway, so the ML-side quest-gated detection covers it.
     [45506] = 45796,   -- Archivum Data Disc (10) -> Celestial Planetarium Key 45796
     [45857] = 45798,   -- Archivum Data Disc (25) -> Heroic Celestial Planetarium Key 45798
+    -- Reply-Code Alpha (Algalon's Gift of the Observer chest, 100%). Its quest offers a CHOICE of four
+    -- rewards, so a list: holding any one of them means the quest is done. Source: quest_template
+    -- 13631 / 13819 RewardChoiceItemID1-4.
+    [46052] = { 46320, 46321, 46322, 46323 },   -- 10: Drape of the Skyherald, Sunglimmer Drape, Brann's Sealing Ring, Starshine Signet
+    [46053] = { 45588, 45618, 45608, 45614 },   -- 25: Drape of the Skyborn, Sunglimmer Cloak, Brann's Signet Ring, Starshine Circle
 }
 
--- You already hold the quest reward this drop grants, so you finished the quest -> don't roll on it.
+-- You already hold the quest reward this drop grants (any of them, for a choice reward), so you
+-- finished the quest -> don't roll on it.
 function addon:OwnsQuestReward(itemId)
     local reward = self.ROLL_REWARD_GATE[itemId]
+    if type(reward) == "table" then
+        for _, id in ipairs(reward) do
+            if self:PlayerHoldsItem(id) then return true end
+        end
+        return false
+    end
     return reward ~= nil and self:PlayerHoldsItem(reward)
 end
 

@@ -220,6 +220,40 @@ H.test("missing guaranteed quest drop (Sapphiron, no key): firm warning once per
     H.eq(#alerts, 1, "same corpse never re-warns")
 end)
 
+H.test("missing quest drop from a CHEST (Gift of the Observer, no Reply-Code): warned via the tooltip name", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local alerts = captureAlerts(w)
+    mockLootWindow(w, { { itemId = 50002, bind = "boe", quality = 4 } }, nil, { "Masterlooter" })   -- no corpse
+    w.env.GetInstanceDifficulty = function() return 2 end
+    w.env.GameTooltipTextLeft1 = { GetText = function() return "Gift of the Observer" end }
+    w.addon:LOOT_OPENED()
+    H.eq(#alerts, 1, "warned: the 100%-drop code is absent from the chest")
+    H.check(alerts[1] and alerts[1]:find("Reply-Code Alpha", 1, true) ~= nil, "warning names the item")
+    H.check(alerts[1] and alerts[1]:find("This chest", 1, true) ~= nil, "worded for a chest")
+    local lot = w.addon.lootCore:openPhantomLotForItem(46053)
+    H.check(lot ~= nil and lot.invisibleToML == true, "25-man code minted as an invisible phantom")
+    w.addon:LOOT_OPENED()
+    H.eq(#alerts, 1, "same chest never re-warns")
+
+    local w2 = makeWorld("Masterlooter", true)
+    startSession(w2)
+    local alerts2 = captureAlerts(w2)
+    mockLootWindow(w2, { { itemId = 46052, bind = "bop" } }, nil, { "Masterlooter" })
+    w2.addon.PlayerHoldsItem = function() return false end
+    w2.env.GameTooltipTextLeft1 = { GetText = function() return "Gift of the Observer" end }
+    w2.addon:LOOT_OPENED()
+    H.eq(#alerts2, 0, "code visible in the chest: nothing to warn about")
+
+    local w3 = makeWorld("Masterlooter", true)
+    startSession(w3)
+    local alerts3 = captureAlerts(w3)
+    mockLootWindow(w3, { { itemId = 50003, bind = "boe", quality = 4 } }, nil, { "Masterlooter" })
+    w3.env.GameTooltipTextLeft1 = { GetText = function() return "Cache of Living Stone" end }
+    w3.addon:LOOT_OPENED()
+    H.eq(#alerts3, 0, "unlisted chest: no warning")
+end)
+
 H.test("quest drop present (or unknown mob): no warning", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
