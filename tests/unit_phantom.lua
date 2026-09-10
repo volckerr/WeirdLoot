@@ -23,9 +23,11 @@ local lotsFor, openLot, owedCount = F.lotsFor, F.openLot, F.owedCount
 local flushWireTo, clearWire, linkFor = F.flushWireTo, F.clearWire, F.linkFor
 
 local UNIQUE_ID = 44444
--- Sapphiron: base creature entry 15989 (0x003E75) in a 3.3.5 corpse GUID; guidNpcId reads sub(8,12)
+-- Corpse GUIDs only dedupe the warning; the source is matched by the dead target's NAME. Any
+-- corpse-shaped GUID does.
 local SAPH_GUID = "0xF130003E750001A2"
-local OTHER_GUID = "0xF1300012340009F9"   -- entry 0x1234: not in the quest-drop map
+local OTHER_GUID = "0xF1300012340009F9"
+local STEEL_GUID = "0xF1300080630005FE"   -- the in-game 25-man Steelbreaker corpse (base entry 32867)
 
 -- ---------------------------------------------------------------------------
 -- core: bag-truth isolation
@@ -148,13 +150,15 @@ end)
 -- ---------------------------------------------------------------------------
 
 -- Install a mock loot window into a world: slots = { {itemId=, bind=("bop"|"boe"|nil)}, ... },
--- corpseGuid on UnitGUID("target"), master-loot candidate list, and a GiveMasterLoot recorder.
--- Returns the recorder table.
-local function mockLootWindow(w, slots, corpseGuid, candidates)
+-- corpseGuid on UnitGUID("target") with sourceName as the dead target's name, master-loot candidate
+-- list, and a GiveMasterLoot recorder. Returns the recorder table.
+local function mockLootWindow(w, slots, corpseGuid, candidates, sourceName)
     local env = w.env
     env.UnitExists = function(unit) return unit == "target" and corpseGuid ~= nil end
     env.UnitIsDead = function(unit) return unit == "target" and corpseGuid ~= nil end
     env.UnitGUID = function(unit) if unit == "target" then return corpseGuid end return "Player-0" end
+    local baseUnitName = env.UnitName
+    env.UnitName = function(unit) if unit == "target" then return corpseGuid and (sourceName or "Nobody") end return baseUnitName(unit) end
     env.UnitIsUnit = function() return true end
     env.GetInstanceDifficulty = function() return 1 end
     env.GetNumLootItems = function() return #slots end
@@ -212,7 +216,7 @@ H.test("missing guaranteed quest drop (Sapphiron, no key): firm warning once per
     local w = makeWorld("Masterlooter", true)
     startSession(w)
     local alerts = captureAlerts(w)
-    mockLootWindow(w, { { itemId = 50002, bind = "boe", quality = 4 } }, SAPH_GUID, { "Masterlooter" })
+    mockLootWindow(w, { { itemId = 50002, bind = "boe", quality = 4 } }, SAPH_GUID, { "Masterlooter" }, "Sapphiron")
     w.addon:LOOT_OPENED()
     H.eq(#alerts, 1, "warned: the 100%-drop key is absent from the ML's loot")
     H.check(alerts[1] and alerts[1]:find("Focusing Iris", 1, true) ~= nil, "warning names the item")
@@ -259,16 +263,67 @@ H.test("quest drop present (or unknown mob): no warning", function()
     startSession(w)
     local alerts = captureAlerts(w)
     w.addon.PlayerHoldsItem = function() return false end
-    mockLootWindow(w, { { itemId = 44569, bind = "bop" } }, SAPH_GUID, { "Masterlooter" })
+    mockLootWindow(w, { { itemId = 44569, bind = "bop" } }, SAPH_GUID, { "Masterlooter" }, "Sapphiron")
     w.addon:LOOT_OPENED()
     H.eq(#alerts, 0, "key visible in the loot: nothing to warn about")
 
     local w2 = makeWorld("Masterlooter", true)
     startSession(w2)
     local alerts2 = captureAlerts(w2)
-    mockLootWindow(w2, { { itemId = 50003, bind = "boe", quality = 4 } }, OTHER_GUID, { "Masterlooter" })
+    mockLootWindow(w2, { { itemId = 50003, bind = "boe", quality = 4 } }, OTHER_GUID, { "Masterlooter" }, "Kologarn")
     w2.addon:LOOT_OPENED()
     H.eq(#alerts2, 0, "unmapped mob: no warning")
+end)
+
+H.test("missing quest drop on a 25-man corpse (Steelbreaker): matched by name, 25-man disc minted and flushed", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local alerts = captureAlerts(w)
+    -- the in-game kill: 25-man difficulty, the corpse GUID carries the BASE entry, four other drops
+    mockLootWindow(w, { { itemId = 45235, bind = "bop" }, { itemId = 45087, bind = "boe", quality = 3 } },
+        STEEL_GUID, { "Masterlooter" }, "Steelbreaker")
+    w.env.GetInstanceDifficulty = function() return 2 end
+    w.addon:LOOT_OPENED()
+    H.eq(#alerts, 1, "warned: the disc is absent")
+    H.check(alerts[1] and alerts[1]:find("It rolls now", 1, true) ~= nil, "the alert promises a roll only when one was minted")
+    local lot = w.addon.lootCore:openPhantomLotForItem(45857)
+    H.check(lot ~= nil and lot.invisibleToML == true, "25-man disc minted as an invisible phantom")
+    H.eq(w.addon.lootCore:openPhantomLotForItem(45506), nil, "the 10-man disc was not minted")
+    -- No bag update happened: the flush alone must have projected and persisted the lot.
+    local inView
+    for _, it in ipairs(w.addon.lootView.items) do if it.id == lot.id then inView = true end end
+    H.check(inView, "phantom is in the loot projection without any bag delta")
+    H.check(w.addon.session.lootCore ~= nil, "ledger persisted to the session")
+    w.addon:LOOT_OPENED()
+    H.eq(#alerts, 1, "same corpse never re-warns")
+end)
+
+H.test("missing quest drop with an unreadable difficulty: honest alert, nothing minted, source stays unseen", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local alerts = captureAlerts(w)
+    mockLootWindow(w, { { itemId = 50002, bind = "boe", quality = 4 } }, STEEL_GUID, { "Masterlooter" }, "Steelbreaker")
+    w.env.GetInstanceDifficulty = function() return 7 end
+    w.addon:LOOT_OPENED()
+    H.eq(#alerts, 1, "warned")
+    H.check(alerts[1] and alerts[1]:find("It rolls now", 1, true) == nil, "no roll promised")
+    H.eq(w.addon.lootCore:openPhantomLotForItem(45857), nil, "nothing minted")
+    w.env.GetInstanceDifficulty = function() return 2 end
+    w.addon:LOOT_OPENED()
+    H.eq(#alerts, 2, "a re-open with a readable difficulty warns again and mints")
+    H.check(w.addon.lootCore:openPhantomLotForItem(45857) ~= nil, "minted on the retry")
+end)
+
+H.test("autoloot: a raid-banked unbound item (Runed Orb) goes to the ML; other unbound loot is left", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    w.addon.db.deer = "Deer"
+    local given = mockLootWindow(w, { { itemId = 45087, bind = nil, quality = 3 }, { itemId = 50003, bind = "boe", quality = 3 }, { itemId = 50004, bind = nil, quality = 3 } },
+        OTHER_GUID, { "Masterlooter", "Deer" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(#given, 2, "both BoE slots routed")
+    H.eq(given[1].idx, 1, "Runed Orb -> ML")
+    H.eq(given[2].idx, 2, "other rare BoE -> disenchanter")
 end)
 
 H.test("resolved phantom: re-opening the corpse assigns to the winner, records + whispers on clear", function()

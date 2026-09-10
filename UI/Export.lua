@@ -146,7 +146,9 @@ function addon:ShowExportWindow(kind, titleText, bodyText)
     window:Show()
 end
 
-function addon:ShowImportWindow(kind, titleText, bodyText, onSave)
+-- defaultText (optional): the list shipped in Data/*.lua. Supplying it adds a Restore Default
+-- button beside Save, which refills the edit box so a mispaste can be seen and then saved over.
+function addon:ShowImportWindow(kind, titleText, bodyText, onSave, defaultText)
     self.ui = self.ui or {}
     self.ui.importWindows = self.ui.importWindows or {}
 
@@ -155,6 +157,7 @@ function addon:ShowImportWindow(kind, titleText, bodyText, onSave)
         window = createTextWindow("WeirdLoot" .. kind .. "ImportWindow", 720, 520, titleText, {
             showSaveButton = true,
             saveButtonText = "Save Import",
+            showRestoreButton = defaultText ~= nil,
         })
         self.ui.importWindows[kind] = window
     end
@@ -166,6 +169,14 @@ function addon:ShowImportWindow(kind, titleText, bodyText, onSave)
         window.editBox:ClearFocus()
         window:Hide()
     end)
+
+    if window.restoreButton then
+        window.restoreButton:SetScript("OnClick", function()
+            window.editBox:SetText(defaultText or "")
+            window.editBox:SetFocus()
+            window.scroll:SetVerticalScroll(0)
+        end)
+    end
 
     window.title:SetText(titleText or "")
     window.editBox:SetText(bodyText or "")
@@ -196,12 +207,12 @@ function addon:ImportRoster()
 end
 
 function addon:ImportNamedItems()
-    if not self:IsAuthorizedLootMaster() then
-        self:Print("Only the loot master can import named items.")
+    if not (self:IsAuthorizedLootMaster() or self:CanEditRoster()) then
+        self:Print("Only the loot master or guild leadership can import named items.")
         return
     end
 
     self:ShowImportWindow("NamedItems", "Import Named Items", self.config.namedItemsText or "", function(text)
         addon:SaveImports(addon.config.rosterImportText, addon.config.lootPriorityText, text)
-    end)
+    end, self.defaultNamedItemsText or "")
 end

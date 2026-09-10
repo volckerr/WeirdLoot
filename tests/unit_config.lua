@@ -190,6 +190,21 @@ H.test("ParseTieredRuleText: parses named rules with LC/loot-council markers", f
     H.notNil(rules["amanitar"], "Amanitar rule parsed")
 end)
 
+H.test("ParseTieredRuleText: an item name containing a comma keeps its whole name and its rule", function()
+    local text = "Voldrethar, Dark Blade of Oblivion, styrza > fury\n"
+    local rules = addon:ParseTieredRuleText(text, addon.ParseNamedToken)
+    H.eq(rules["voldrethar"], nil, "the name is not truncated at the first comma")
+    local rule = rules["voldrethar, dark blade of oblivion"]
+    H.notNil(rule, "the full item name keys the rule")
+    H.eq(#rule.tiers, 2, "both tiers survive")
+    H.eq(rule.tiers[1].entries[1].playerKey, "styrza", "first tier is the real prio, not the item name tail")
+end)
+
+H.test("ParseTieredRuleText: a trailing comma does not swallow the rule", function()
+    local rules = addon:ParseTieredRuleText("Amanitar, dave > eve,\n", addon.ParseNamedToken)
+    H.notNil(rules["amanitar"], "rule still parsed")
+end)
+
 H.test("ParseTieredRuleText: returns empty map for empty input", function()
     local rules = addon:ParseTieredRuleText("", addon.ParseNamedToken)
     -- a rule map is a table; size 0 is acceptable

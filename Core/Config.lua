@@ -181,9 +181,13 @@ function addon:ParseTieredRuleText(text, parser)
     local rules = {}
 
     for _, line in ipairs(util:SplitLines(text)) do
-        local parts = util:Split(line, ",")
-        local itemName = string.trim(parts[1] or "")
-        local ruleText = string.trim(parts[2] or "")
+        -- Split item from rule at the LAST comma: item names carry commas of their own
+        -- ("Voldrethar, Dark Blade of Oblivion"), while rule text never does, its separators
+        -- being ">" and "/". A trailing comma is dropped first so it cannot eat the rule.
+        line = string.gsub(string.trim(line), ",%s*$", "")
+        local head, tail = string.match(line, "^(.*),([^,]*)$")
+        local itemName = string.trim(head or line)
+        local ruleText = string.trim(tail or "")
         if itemName ~= "" and ruleText ~= "" then
             local tiers = {}
 
@@ -378,6 +382,7 @@ function addon:SaveImports(rosterText, lootText, namedText)
     self.config.namedItemsText = namedText or self.config.namedItemsText or ""
     self.config.revision = (self.config.revision or 0) + 1
     self:NormalizeAllConfig()
+    if self.RestampLotPrios then self:RestampLotPrios() end
     self:RefreshRoster()
     self:TriggerCallback("CONFIG_UPDATED")
     self:Print("Configuration saved.")
@@ -427,6 +432,7 @@ function addon:SaveNamedItemsText(namedText, suppressPrint)
     self.config.namedItemsText = namedText or ""
     self.config.revision = (self.config.revision or 0) + 1
     self:NormalizeAllConfig()
+    if self.RestampLotPrios then self:RestampLotPrios() end
     self:RefreshRoster()
     self:TriggerCallback("CONFIG_UPDATED")
     if not suppressPrint then

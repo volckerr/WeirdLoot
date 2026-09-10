@@ -43,6 +43,7 @@ WeirdLoot is a World of Warcraft 3.3.5a addon for Wrath-era raid loot handling. 
 - The raid roster derives from the guild: guild rank maps to status, officer-note tokens supply spec.
 - Non-guild raiders can be added as guests; the Roster tab compares configured roster against the live raid.
 - `Import Roster` and `Import Named Items` on the Loot Master tab open paste windows for manual lists.
+- Guild leadership can import and broadcast named items without loot authority; the loot master adopts the list.
 - The loot master's config is the authoritative source for loot decisions.
 
 ### Results and exports

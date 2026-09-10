@@ -1586,6 +1586,58 @@ test("ML authority: popup BiS follows the synced prio, not the raider's local li
     check(f.msBtn:IsEnabled(), "MS stays available")
 end)
 
+test("prio on the lot: the ML stamps its rendered prio at mint and the snapshot carries it", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    ml.addon.GetLiveItemPrio = function(_, item) return item.name == "Token of Test" and "Warrior Fury" or ml.addon.DEFAULT_PRIO end
+    startSession(ml)
+    setBag(ml, 40004, 1); setBag(ml, 40005, 1); bagUpdate(ml)
+    local token, blade = openLot(ml, 40004), openLot(ml, 40005)
+    eq(token.prio, "Warrior Fury", "listed item stamped with the ML's rendered prio")
+    eq(blade.prio, ml.addon.DEFAULT_PRIO, "unlisted item stamped with the no-prio bracket order")
+    flushWireTo(raider)
+    eq(raider.addon.lootCore:Get(token.id).prio, "Warrior Fury", "prio rides the wire onto the raider's lot")
+    local viewPrio
+    for _, it in ipairs(raider.addon.lootView.items) do if it.id == blade.id then viewPrio = it.prio end end
+    eq(viewPrio, ml.addon.DEFAULT_PRIO, "raider loot projection carries the stamped prio")
+    check(not raider.addon:PrioHasListing(viewPrio), "no-prio stamp gates BiS off")
+    check(raider.addon:PrioHasListing("Warrior Fury"), "listed stamp gates BiS on")
+end)
+
+test("prio on the lot: an LC override set while the item is pending re-stamps and reaches the raider", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    startSession(ml)
+    setBag(ml, 40004, 1); bagUpdate(ml)
+    local lot = openLot(ml, 40004)
+    flushWireTo(raider)
+    eq(raider.addon.lootCore:Get(lot.id).prio, ml.addon.DEFAULT_PRIO, "baseline: no listing")
+    ml.addon:SetSessionLCOverride("Token of Test", "Raidertwo > LC")
+    check(lot.prio ~= ml.addon.DEFAULT_PRIO and lot.prio:find("Raidertwo"), "override re-rendered onto the pending lot: " .. tostring(lot.prio))
+    flushWireTo(raider)
+    eq(raider.addon.lootCore:Get(lot.id).prio, lot.prio, "re-stamp rode a delta to the raider")
+    ml.addon:ClearSessionLCOverride("Token of Test")
+    flushWireTo(raider)
+    eq(raider.addon.lootCore:Get(lot.id).prio, ml.addon.DEFAULT_PRIO, "clearing the override restores the no-prio stamp everywhere")
+end)
+
+test("prio on the lot: saving the named list re-stamps open lots; a raider's own list never does", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    startSession(ml)
+    setBag(ml, 40004, 1); bagUpdate(ml)
+    local lot = openLot(ml, 40004)
+    ml.addon:SaveNamedItemsText("Token of Test, Raidertwo > LC", true)
+    check(lot.prio:find("Raidertwo"), "named list save re-stamped the lot: " .. tostring(lot.prio))
+    flushWireTo(raider)
+    eq(raider.addon.lootCore:Get(lot.id).prio, lot.prio, "raider holds the ML's stamp")
+    raider.addon:SaveNamedItemsText("Token of Test, Someoneelse > LC", true)
+    eq(raider.addon.lootCore:Get(lot.id).prio, lot.prio, "a non-ML save does not touch the mirrored lot")
+end)
+
 test("a raider requesting sync from a session-less ML gets no phantom session", function()
     clearWire()
     local ml = makeWorld("Masterlooter", true)        -- authorized ML, but no session started
@@ -2513,6 +2565,18 @@ test("roll block: Reply-Code Alpha is blocked once you hold ANY of its four choi
     eq(w.addon:RollSelfBlockReason(46053), "quest", "a banked 25-man choice reward blocks the 25-man code")
 end)
 
+test("roll block: holding the Archivum Data Disc itself blocks a second one (no Unique limit, no reward yet)", function()
+    local w = makeWorld("Saelinen", false)
+    eq(w.addon:RollSelfBlockReason(45857), nil, "25-man disc not blocked with nothing held")
+    w.env.__bank[45857] = 1                         -- looted one last week, quest not turned in (bank counts as held)
+    eq(w.addon:RollSelfBlockReason(45857), "quest", "a held disc blocks the same disc")
+    eq(w.addon:RollSelfBlockReason(45506), nil, "the 10-man disc is a different item")
+    eq(w.addon:RollSelfBlockReason(40004), nil, "an unrelated item is unaffected")
+    w.env.__bank[45857] = nil
+    w.env.__bank[45798] = 1                         -- chain finished: Heroic Celestial Planetarium Key
+    eq(w.addon:RollSelfBlockReason(45857), "quest", "the reward still blocks once the disc is gone")
+end)
+
 -- ===========================================================================
 -- ADVERSARIAL / FAILURE-MODE cases (where things break, by design or as a known gap)
 -- ===========================================================================
@@ -3307,6 +3371,8 @@ test("ml-prompt: resolving as ML with an active session asks, and withholds auth
     w.addon:RefreshLootAuthority()                           -- retry-loop re-resolves do not re-ask
     w.addon:RecheckLootAuthority()
     eq(#F.WIRE, 0, "nothing broadcast while held")
+    w.addon:RequestSessionSync()                             -- the raider-mode path would target the ML: ourselves
+    eq(#F.WIRE, 0, "no sync request whispered to ourselves while held")
     eq(w.addon.session.id, "5", "session untouched while held")
 end)
 

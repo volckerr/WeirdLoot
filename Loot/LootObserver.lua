@@ -7,7 +7,7 @@ local util = addon.util
 --     item despawns with the corpse (TODO item 30);
 --   * a quest-gated drop the ML cannot SEE (quest completed): the server filters the slot out of
 --     the ML's loot entirely (TODO item 29).
--- The observer snapshots every slot at LOOT_OPENED (with the source mob from the target GUID),
+-- The observer snapshots every slot at LOOT_OPENED (with the source named from the dead target),
 -- ticks slots off on LOOT_SLOT_CLEARED, and knows at LOOT_CLOSED exactly what stayed behind. On
 -- top of that it warns the ML firmly in both cases, mints a PHANTOM lot for a blocked unique so
 -- the raid rolls it normally (LootCore:MintPhantom), and master-loots the copy straight to the
@@ -15,40 +15,24 @@ local util = addon.util
 -- ML-only by construction: every entry point is called under AutoLoot's session + IsMasterLooter
 -- gate or checks it itself.
 
--- NPC id from a 3.3.5 creature GUID (DBM's battle-tested extraction).
-local function guidNpcId(guid)
-    return guid and tonumber(guid:sub(8, 12), 16) or nil
-end
-
--- Quest-gated GUARANTEED drops by source mob (corpse-GUID entry; 10/25 share the base entry).
--- Only 100%-chance items belong here: the "absent from the ML's loot = the ML cannot see it"
--- inference does not hold for chance drops. items is keyed by GetInstanceDifficulty (1=10, 2=25).
--- Source: chromiecraft creature_loot_template (Chance=100 rows).
-addon.QUEST_GATED_MOB_DROPS = {
-    [15989] = { -- Sapphiron, Naxxramas
-        label = "the Key to the Focusing Iris",
-        items = { [1] = 44569, [2] = 44577 },
-    },
-    -- Archivum Data Disc, Assembly of Iron (Ulduar). Both Steelbreaker and Runemaster Molgeim carry
-    -- it at 100%, so either corpse (last of the three killed) is the looted one; register all four
-    -- size-specific npc ids. Unlike Sapphiron the disc has distinct item ids per size, so each entry
-    -- lists only its own difficulty. 10=45506, 25=45857.
-    [32867] = { label = "the Archivum Data Disc", items = { [1] = 45506 } }, -- Steelbreaker (10)
-    [32927] = { label = "the Archivum Data Disc", items = { [1] = 45506 } }, -- Runemaster Molgeim (10)
-    [33693] = { label = "the Archivum Data Disc", items = { [2] = 45857 } }, -- Steelbreaker (25)
-    [33692] = { label = "the Archivum Data Disc", items = { [2] = 45857 } }, -- Runemaster Molgeim (25)
-}
-
--- Quest-gated GUARANTEED drops from a CHEST, keyed by the object's name. A chest is not a unit, so
--- no token or GUID names it on 3.3.5a (no target, no "npc", no GetLootSourceInfo); the one signal is
--- the world tooltip, whose first line is still the object's name when LOOT_OPENED fires (verified
--- in-game on the Cache of Living Stone, autoloot on and off). Source: gameobject_loot_template
--- (Chance=100 rows) via gameobject_template Data1.
-addon.QUEST_GATED_CHEST_DROPS = {
-    ["Gift of the Observer"] = {   -- Algalon, Ulduar (194821 / 194822)
-        label = "Reply-Code Alpha",
-        items = { [1] = 46052, [2] = 46053 },
-    },
+-- Quest-gated GUARANTEED drops, keyed by the SOURCE NAME as this client sees it: a dead target's
+-- unit name for a corpse, the world tooltip's first line for a chest (a chest is not a unit, so no
+-- token or GUID names it on 3.3.5a; the tooltip line is still the object's name when LOOT_OPENED
+-- fires, verified in-game on the Cache of Living Stone). Names, not npc ids: a corpse GUID carries
+-- the creature's BASE entry whatever the raid size (the server swaps the 25-man template
+-- server-side only), so an id table needs every size folded under the base id and silently skips
+-- the warning when it is not; this check runs on the ML's own client, and the name is what that
+-- client has. Only 100%-chance items belong here: the "absent from the ML's loot = the ML cannot
+-- see it" inference does not hold for chance drops. items is keyed by GetInstanceDifficulty
+-- (1=10, 2=25). Source: chromiecraft creature_loot_template / gameobject_loot_template (Chance=100).
+-- Assumes an English client (ChromieCraft is enUS), as the item-type checks already do.
+addon.QUEST_GATED_DROPS = {
+    ["Sapphiron"]            = { label = "the Key to the Focusing Iris", items = { [1] = 44569, [2] = 44577 } },
+    -- Assembly of Iron: Steelbreaker and Runemaster Molgeim both carry the disc at 100%, so
+    -- whichever of them died last is the looted corpse.
+    ["Steelbreaker"]         = { label = "the Archivum Data Disc", items = { [1] = 45506, [2] = 45857 } },
+    ["Runemaster Molgeim"]   = { label = "the Archivum Data Disc", items = { [1] = 45506, [2] = 45857 } },
+    ["Gift of the Observer"] = { label = "Reply-Code Alpha", items = { [1] = 46052, [2] = 46053 } },   -- Algalon's chest
 }
 
 -- Firm, local alert: red chat line + the raid-warning sound. The persistent signal lives on the
@@ -69,14 +53,16 @@ end
 -- Called at the top of AutoLoot's LOOT_OPENED (already gated: session active + we are the WoW ML),
 -- BEFORE any routing assigns, so the snapshot is the window's true pre-assign contents.
 function addon:ObserveLootOpened()
-    local corpseGuid, chestName
+    local corpseGuid, sourceName, isChest
     if UnitExists and UnitExists("target") and UnitIsDead and UnitIsDead("target") then
         corpseGuid = UnitGUID and UnitGUID("target") or nil
+        sourceName = UnitName and UnitName("target") or nil
     else
         -- ponytail: live tooltip read only; a cursor that left the chest before the window opened
         -- reads nil (no warning). Add a CURSOR_UPDATE capture if that is ever seen in practice.
         local fs = GameTooltipTextLeft1
-        chestName = fs and fs.GetText and fs:GetText() or nil
+        sourceName = fs and fs.GetText and fs:GetText() or nil
+        isChest = sourceName ~= nil
     end
     local slots = {}
     for slot = 1, GetNumLootItems() do
@@ -91,13 +77,25 @@ function addon:ObserveLootOpened()
     end
     self.lootObs = {
         corpseGuid = corpseGuid,           -- nil for chests (no dead target to read)
-        mobId = guidNpcId(corpseGuid),
-        chestName = chestName,             -- world-tooltip name when there is no corpse
+        sourceName = sourceName,           -- dead target's name, or the world-tooltip name for a chest
+        isChest = isChest or nil,
         slots = slots,
         assigning = {},                    -- [slot] = pending-send info, set by TryPhantomSends
         open = true,
     }
     self._lootObsSeen = self._lootObsSeen or {}   -- corpse+item dedupe across re-opens
+
+    -- Trace what the observer could see at open: the source it resolved (or failed to) and the
+    -- slot contents, so a missed quest-drop warning can be diagnosed from the log.
+    local ids = {}
+    for _, s in pairs(slots) do ids[#ids + 1] = s.itemId end
+    self:LogCoreEvent("loot-open", {
+        guid = corpseGuid, source = sourceName, chest = isChest or false,
+        tgt = UnitExists and UnitExists("target") and (UnitName and UnitName("target")) or nil,
+        tgtDead = UnitIsDead and UnitIsDead("target") or false,
+        diff = (GetInstanceDifficulty and GetInstanceDifficulty()) or nil,
+        items = table.concat(ids, ","),
+    })
 
     self:WarnMissingQuestDrops()
     self:TryPhantomSends()
@@ -142,18 +140,14 @@ end
 function addon:WarnMissingQuestDrops()
     local obs = self.lootObs
     if not obs then return end
-    local entry, seenKey
-    if obs.mobId then
-        entry = self.QUEST_GATED_MOB_DROPS[obs.mobId]
-        seenKey = (obs.corpseGuid or "?") .. ":quest"
-    elseif obs.chestName then
-        entry = self.QUEST_GATED_CHEST_DROPS[obs.chestName]
-        seenKey = "chest:" .. obs.chestName .. ":quest"
-    end
+    local entry = obs.sourceName and self.QUEST_GATED_DROPS[obs.sourceName]
+    -- once per corpse (GUID) or, for a chest, once per name this play-session (a raid cache is
+    -- looted once per lockout)
+    local seenKey = (obs.corpseGuid or ("chest:" .. tostring(obs.sourceName))) .. ":quest"
+    self:LogCoreEvent("quest-check", { key = seenKey, entry = entry and entry.label or nil,
+        seen = self._lootObsSeen[seenKey] or false })
     if not entry then return end
-
     if self._lootObsSeen[seenKey] then return end
-    self._lootObsSeen[seenKey] = true
 
     local difficulty = (GetInstanceDifficulty and GetInstanceDifficulty()) or 1
     local expected = entry.items[difficulty]
@@ -167,16 +161,30 @@ function addon:WarnMissingQuestDrops()
             end
         end
     end
-    if present then return end
+    self:LogCoreEvent("quest-missing", { expected = expected, present = present, diff = difficulty })
+    if present then
+        self._lootObsSeen[seenKey] = true
+        return
+    end
 
-    self:LootAlert((obs.chestName and "This chest" or "This kill") .. " always drops " .. entry.label .. ", but it is NOT in your loot. You likely cannot see it (quest already done). It rolls now; the winner picks it up via a master-loot loan.")
+    local where = obs.isChest and "This chest" or "This kill"
+    if not (expected and self.lootCore) then
+        -- Nothing to mint for this difficulty reading: say so rather than promise a roll, and leave
+        -- the source unseen so a re-open (after a /reload, say) gets another chance.
+        self:LootAlert(where .. " always drops " .. entry.label .. ", but it is NOT in your loot and WeirdLoot cannot tell which size dropped. Have another looter pick it up.")
+        return
+    end
+    self._lootObsSeen[seenKey] = true
+    self:LootAlert(where .. " always drops " .. entry.label .. ", but it is NOT in your loot. You likely cannot see it (quest already done). It rolls now; the winner picks it up via a master-loot loan.")
     -- Roll the invisible drop as a phantom. invisibleToML routes its resolve to the LOAN flow
     -- (the ML can never assign a slot they cannot see, so the corpse-send path is useless here).
     -- Local-only field: the owner's client decides the flavor; raiders roll it like any drop.
-    if expected and self.lootCore then
-        local lot = self.lootCore:MintPhantom(expected, 1)
-        lot.invisibleToML = true
-    end
+    -- Flush at once: a mint alone emits no ledger change, and the roll must not wait for some
+    -- later bag delta to project, persist and broadcast it.
+    local lot = self.lootCore:MintPhantom(expected, 1)
+    lot.invisibleToML = true
+    self:LogCoreEvent("quest-phantom", { id = lot.id, item = expected, state = lot.state })
+    self.lootCore:Flush()
 end
 
 -- ---------------------------------------------------------------------------
@@ -201,6 +209,7 @@ function addon:OnUniqueBlockedSlot(slot, itemId, link)
     self:LootAlert(shown .. " is a Unique you already hold: it CANNOT enter your bags and stays on the corpse. It rolls now; re-open the corpse afterwards to send it to the winner.")
     if self.lootCore then
         self.lootCore:MintPhantom(itemId, 1)
+        self.lootCore:Flush()   -- see WarnMissingQuestDrops: a bare mint is invisible until flushed
     end
 end
 

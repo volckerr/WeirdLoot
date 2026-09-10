@@ -189,6 +189,9 @@ function addon:BuildMasterTab()
 	setButtonTooltip(importNamedItemsButton, "Import Named Items",
 		"Opens an editable import window where you can paste the current named-item priority list and save it to WeirdLoot. This is reserved for items that are prioritized based on Loot Council decision.")
 
+	setButtonTooltip(broadcastNamedItemsButton, "Broadcast Named Items",
+		"Sends your named-item list to the raid so the loot master adopts it. Open to the loot master and guild leadership (the roster-edit rank).")
+
 	setButtonTooltip(processButton, "Start Rolls",
 		"Starts live rolls in batches (size configurable in Options). The next batch starts when the current one finishes.")
 
@@ -246,6 +249,13 @@ function addon:RefreshMasterTab()
         if panel.allowTradesButton then panel.allowTradesButton:Disable() end
     end
 
+    -- Named items are LC decisions, so leadership (roster-edit rank) may hand the ML a list
+    -- without holding loot authority; the receive gate in Comm mirrors this.
+    if self:CanEditRoster() then
+        panel.importNamedItemsButton:Enable()
+        panel.broadcastNamedItemsButton:Enable()
+    end
+
     if panel.unlockButton then
         if authorized then
             panel.unlockButton:Show()
@@ -297,7 +307,7 @@ function addon:RefreshMasterTab()
         "Export Log: Opens the detailed loot-resolution audit log for review or record keeping.",
         "Import Roster: Opens an editable import window where you can paste the current weekly roster list and save it to WeirdLoot.",
         "Import Named Items: Opens an editable import window where you can paste the current named-item priority list and save it to WeirdLoot.",
-        "Broadcast Named Items: Sends your current named-item list to the raid once so each raider's addon saves and uses the latest version.",
+        "Broadcast Named Items: Sends your current named-item list to the raid once so each raider's addon (the loot master's included) saves and uses the latest version. Open to the loot master and guild leadership.",
     }, "\n"))
 
     local snapshotText = string.format(

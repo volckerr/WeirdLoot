@@ -204,11 +204,14 @@ local function updateLootMasterControlButtons(row, isVisible, activeRoll, isLock
     end
 end
 
-local function applyLootChoiceAvailability(row, isLocked, isAllowed, itemLink, itemName, isPhantom)
+local function applyLootChoiceAvailability(row, isLocked, isAllowed, itemLink, itemName, isPhantom, prio)
     -- Same policy as the roll popup (util:RollTierAvailability), rendered as plain enable/disable.
     local itemId = itemLink and util:ItemIdFromLink(itemLink)
     local blockReason = itemId and addon:RollSelfBlockReason(itemId, isPhantom)
-    local hasPrio = addon:ItemHasPriority(itemName)
+    -- ML authority, same as the popup: BiS follows the prio stamped on the lot. Only an unstamped
+    -- lot (the ML had no name for it yet) consults this client's own list.
+    local hasPrio
+    if prio ~= nil then hasPrio = addon:PrioHasListing(prio) else hasPrio = addon:ItemHasPriority(itemName) end
     local avail = util:RollTierAvailability(itemLink, isAllowed, isLocked, blockReason, hasPrio)
     for _, option in ipairs(RESPONSE_BUTTONS) do
         local button = row.choiceButtons[option.key]
@@ -358,7 +361,7 @@ function addon:BuildLootTab()
                 -- hold/quest checks match on the numeric item id
                 local blockReason = option.key ~= "pass" and addon:RollSelfBlockReason(row.item.itemId, row.item.phantom)
                 if blockReason == "quest" then
-                    addon:Print("You have already completed that quest. You may only pass.")
+                    addon:Print("You already hold that quest item or completed its quest. You may only pass.")
                     return
                 elseif blockReason == "unique" then
                     addon:Print("You already have that unique item. You may only pass.")
@@ -681,7 +684,7 @@ function addon:RefreshLootTab()
         local locked = self:IsItemLocked(item.id)
         local allowedForPlayer = isPlayerAllowedForLootItem(item, playerName)
         row.icon:SetDesaturated(locked)        -- grey out the item icon once it's been rolled out
-        applyLootChoiceAvailability(row, locked, allowedForPlayer, item.link, rName or item.name, item.phantom)
+        applyLootChoiceAvailability(row, locked, allowedForPlayer, item.link, rName or item.name, item.phantom, item.prio)
         updateLootMasterControlButtons(row, self:IsAuthorizedLootMaster(), self:GetActiveLiveRollForItem(item), locked)
         local typeText, slotText = getLootItemColumns(item.link)
         row.itemType:SetText(typeText)

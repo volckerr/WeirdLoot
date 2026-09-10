@@ -213,7 +213,10 @@ function addon:InitializeSession()
         -- never skip the sync send that keeps raiders current. Projections are rebuilt just before the UI
         -- callback, since the tabs render from them.
         self.lootCore:On("ledgerChanged", function()
-            if self:IsAuthorizedLootMaster() then self:AutoBroadcastSession() end
+            if self:IsAuthorizedLootMaster() then
+                self:StampLotPrios()        -- before the send, so a fresh lot's prio rides the same delta
+                self:AutoBroadcastSession()
+            end
             self.lootCore:SaveTo(self.session)   -- keep the persisted ledger current
             self:RebuildLootProjections()
             self:TriggerCallback("SESSION_UPDATED")
@@ -243,6 +246,7 @@ function addon:RebuildLootProjections()
             quantity = core:LiveCount(lot.id),
             state = lot.state,
             phantom = lot.phantom or nil,       -- copy on a corpse, not in the ML's bags
+            prio = lot.prio,                    -- ML-stamped priority; nil only until the name resolves
             responses = lot.responses,          -- playerKey -> tier string
             locked = lot.state == core.STATE.RESOLVED,
         }
@@ -571,6 +575,32 @@ function addon:ClearSession()
     self:TriggerCallback("SESSION_UPDATED")
 end
 
+-- Stamp the ML's rendered priority onto live lots that lack one (or all of them, when force). The
+-- lookup is by item name, so a lot whose name is not cached yet stays unstamped and is retried on
+-- the next ledger change; readers fall back to their local list until then. Returns true if any
+-- lot changed (the caller decides whether that needs a flush).
+function addon:StampLotPrios(force)
+    local core = self.lootCore
+    if not core or not self.GetLiveItemPrio then return false end
+    local changed = false
+    for _, lot in ipairs(core:List()) do
+        if force or lot.prio == nil then
+            local name = util:ItemRender(lot.itemId)
+            if name and core:SetPrio(lot.id, self:GetLiveItemPrio({ name = name })) then
+                changed = true
+            end
+        end
+    end
+    return changed
+end
+
+-- A rule change (named list saved, LC override set or cleared) re-renders every open lot's prio and
+-- pushes the result out. Rolls already running keep the prio they started with.
+function addon:RestampLotPrios()
+    if not self:IsAuthorizedLootMaster() then return end
+    if self:StampLotPrios(true) then self.lootCore:Flush() end
+end
+
 -- Session-scoped LC priority override for a single item. Parsed through the same machinery as
 -- the persistent namedRules, so the Resolver consumes it identically. Stored on self.session
 -- (not self.config) so it wipes when ClearSession runs. Authoritative on the ML; raiders don't
@@ -583,6 +613,7 @@ function addon:SetSessionLCOverride(itemName, prioText)
     if prioText == "" then
         self.session.lcOverrides[key] = nil
         self:Print("LC override cleared for " .. itemName .. ".")
+        self:RestampLotPrios()
         self:TriggerCallback("SESSION_UPDATED")
         return true
     end
@@ -598,6 +629,7 @@ function addon:SetSessionLCOverride(itemName, prioText)
     end
     self.session.lcOverrides[key] = rule
     self:Print(string.format("LC override set for %s: %s", itemName, rule.raw))
+    self:RestampLotPrios()
     self:TriggerCallback("SESSION_UPDATED")
     return true
 end

@@ -295,6 +295,7 @@ function addon:BuildLotValue(lot)
         awards = awards,
         removed = lot.removed or nil,
         phantom = lot.phantom or nil,               -- corpse copy: mirrors must not treat it owed-tradeable
+        prio = lot.prio or nil,                     -- ML-rendered priority: raiders gate BiS on this, not their list
         seq = self.lootCore.seq or 0,               -- used by deltas; ignored in a full snapshot
         rollRemaining = tonumber(self:RollRemaining(lot)),   -- number for a rolling lot, else nil
     }
@@ -315,6 +316,7 @@ function addon:DecodeLotValue(v)
         responses = v.responses or {},
         removed = v.removed or nil,
         phantom = v.phantom or nil,
+        prio = v.prio or nil,
     }
     -- Rebuild the authoritative award disposition so a mirror's liveCount is holder-aware (a copy held
     -- by another ML is not in OUR bags) and a promoted ML inherits the owed map directly.
@@ -526,6 +528,11 @@ function addon:RequestSessionSync()
         return
     end
     if not self.syncChannel then return end
+    -- The resolved ML can be this very player while the fresh-session prompt holds authority back;
+    -- a request would only whisper ourselves until the retry budget runs out.
+    if util:NormalizeKey(self:GetLootMasterName() or "") == util:NormalizeKey(util:GetPlayerName("player")) then
+        return
+    end
     -- WeirdSync defers the request if the loot master is not resolved yet (common right after a
     -- reload, before loot-method/roster data settles) and fires it the moment it is, so a
     -- reloading raider always ends up requesting a sync instead of silently giving up.
@@ -537,14 +544,13 @@ end
 --
 -- It is unclear who this push actually serves. Roll prio already rides the DROP wire (the ML computes
 -- GetLiveItemPrio and sends the rendered string), so raiders never consult these rules for a roll; the
--- only raider-side use of the saved rules is the "Loot Council" label on a no-winner result. So today
--- this is near-vestigial. The intended future direction may be the inverse: let leadership/officers
--- push updated rosters and named priorities TO the ML for it to adopt, which would need the opposite
--- gating (an authorized officer sends, the ML accepts and uses it). Until that exists, this is just the
--- ML mirroring its own config outward.
+-- only raider-side use of the saved rules is the "Loot Council" label on a no-winner result. The
+-- real use is the other direction: guild leadership (same rank gate as roster edits) pushes an
+-- updated named-items list and the ML adopts it, so the ML need not be the one holding the LC
+-- decisions. Whole-raid distribution keeps one path for both senders; receivers gate on sender.
 function addon:BroadcastNamedItems()
-    if not self:IsAuthorizedLootMaster() then
-        self:Print("Only the loot master can broadcast named items.")
+    if not (self:IsAuthorizedLootMaster() or self:CanEditRoster()) then
+        self:Print("Only the loot master or guild leadership can broadcast named items.")
         return
     end
 
@@ -671,11 +677,13 @@ function addon:HandleCommMessage(sender, value)
     elseif command == "NAMED_ITEMS_SYNC" then
         local expectedLootMaster = util:NormalizeKey(self:GetLootMasterName() or "")
         local senderKey = util:NormalizeKey(sender or "")
-        if expectedLootMaster ~= "" and senderKey ~= expectedLootMaster then
+        if senderKey ~= expectedLootMaster and not self:IsGuildLeadership(sender) then
             return
         end
         self:SaveNamedItemsText(fields[2] or "", true)
-        self:Print("Named items updated from " .. ((fields[1] ~= "" and fields[1]) or sender or "loot master") .. ".")
+        -- Credit the actual sender. fields[1] is the loot master the SENDER resolved, so an officer's
+        -- push would otherwise tell the ML its own name and read as self-inflicted.
+        self:Print("Named items updated from " .. (sender or "leadership") .. ".")
     elseif command == "ROSTER_SYNC" then
         local expectedLootMaster = util:NormalizeKey(self:GetLootMasterName() or "")
         local senderKey = util:NormalizeKey(sender or "")

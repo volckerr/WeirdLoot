@@ -65,6 +65,12 @@ function addon:FindMasterLootCandidate(name)
     return nil
 end
 
+-- Items the raid banks with the ML whatever their binding or quality: crafting orbs are unbound
+-- trade goods, so neither bind branch below would ever route them. Keyed by item id.
+addon.AUTOLOOT_TO_ML = {
+    [45087] = true,   -- Runed Orb (Ulduar)
+}
+
 function addon:LOOT_OPENED()
     local session = self:GetCurrentSession()
     if not session.active or not self:IsMasterLooter() then return end
@@ -92,12 +98,14 @@ function addon:LOOT_OPENED()
             local _, _, _, quality = GetLootSlotInfo(slot)
             local bind = self:LootSlotBindType(slot)
             local target
-            if bind == "bop" then
+            local link = GetLootSlotLink(slot)
+            local itemId = link and util:ItemIdFromLink(link)
+            if itemId and self.AUTOLOOT_TO_ML[itemId] then
+                target = selfIdx                                  -- raid-banked -> ML
+            elseif bind == "bop" then
                 -- A pure-Unique we already hold cannot be self-assigned: GiveMasterLoot silently
                 -- no-ops and the item despawns with the corpse. Leave the slot and let the
                 -- observer warn + phantom-roll it (sent to the winner off the corpse instead).
-                local link = GetLootSlotLink(slot)
-                local itemId = link and util:ItemIdFromLink(link)
                 if itemId and self:LootSlotIsBlockedUnique(itemId) then
                     self:OnUniqueBlockedSlot(slot, itemId, link)
                 else

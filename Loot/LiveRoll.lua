@@ -284,12 +284,10 @@ end
 function addon:RestoreRollPopup(lot)
     local name, link, icon = util:ItemRender(lot.itemId)
     local remaining = (self._rollRemaining and self._rollRemaining[lot.id]) or getRollDuration()
-    -- The ML's broadcast prio is not persisted on the synced lot, so a restore (relog, or the
-    -- ROLLING delta racing ahead of the DROP) has no authoritative prio. Fall back to this client's
-    -- own listed priority rather than "" -- an empty prio would wrongly gate BiS as "no priority".
-    -- If the DROP then lands (the race), ShowRollBannerCard's dedupe re-assert corrects it to the
-    -- ML's exact prio + availability.
-    local prio = (name and self:GetLiveItemPrio({ name = name })) or ""
+    -- The synced lot carries the ML's prio. Only a lot the ML could not stamp yet (item name not in
+    -- its cache) falls back to this client's own list rather than "": an empty prio would wrongly
+    -- gate BiS as "no priority". A DROP landing later re-asserts via ShowRollBannerCard's dedupe.
+    local prio = lot.prio or (name and self:GetLiveItemPrio({ name = name })) or ""
     local roll = {
         id = lot.id, itemId = lot.itemId, link = link,
         name = name or link or ("item:" .. tostring(lot.itemId)),
@@ -329,6 +327,11 @@ local POPUP_INTEREST_OWNER_H = 64       -- floor for the ML popup: End/Cancel li
 -- roll BiS (see util:RollTierAvailability), so its default order starts at MS.
 local DEFAULT_PRIO = "MS > MU > OS > TM"
 addon.DEFAULT_PRIO = DEFAULT_PRIO   -- the banner roll cards show the same no-prio bracket order
+
+-- A no-prio item renders as DEFAULT_PRIO; any other string means the ML lists a priority for it.
+function addon:PrioHasListing(prio)
+    return prio ~= nil and prio ~= "" and prio ~= DEFAULT_PRIO
+end
 -- Display labels for the rolling hover lists (live loot popup + loot tab row). The TM bracket
 -- spells out "Tmog" here so the reader instantly knows what the roller wants, without conflating
 -- it with the compact "TM" abbreviation used on the bracket buttons themselves.
@@ -640,7 +643,7 @@ local DISABLED_REASON_TEXT = {
     type = "Not used for this item type.",
     class = "Your class cannot use this item.",
     unique = "You already have this unique item.",
-    quest = "You have already completed this quest.",
+    quest = "You already hold this quest item or completed its quest.",
     mount = "You have already learned this mount.",
     noprio = "No priority is listed for this item.",
 }
@@ -658,7 +661,7 @@ local function applyInterestButtonAvailability(self, f, roll)
     -- ML authority: BiS availability follows the prio the ML broadcast (roll.prio), not this client's
     -- own list, so a raider with a different or stale prio table can't enable a BiS the ML did not
     -- grant. A no-prio item syncs as DEFAULT_PRIO; any other string means it has a listed priority.
-    local hasPrio = roll.prio ~= nil and roll.prio ~= "" and roll.prio ~= DEFAULT_PRIO
+    local hasPrio = self:PrioHasListing(roll.prio)
     -- shared policy: a roll popup is always an open (never locked) lot
     local avail = util:RollTierAvailability(roll.itemId, allowed, false, blockReason, hasPrio)
 
@@ -1164,16 +1167,20 @@ addon.ROLL_REWARD_GATE = {
 }
 
 -- You already hold the quest reward this drop grants (any of them, for a choice reward), so you
--- finished the quest -> don't roll on it.
+-- finished the quest; or you still hold the DROP itself (a quest starter the server keeps until the
+-- turn-in, and one that carries no Unique limit, like the Archivum Data Disc), so a second copy is
+-- useless to you and, once the quest is started, unlootable. Either way: don't roll on it.
 function addon:OwnsQuestReward(itemId)
     local reward = self.ROLL_REWARD_GATE[itemId]
+    if reward == nil then return false end
+    if self:PlayerHoldsItem(itemId) then return true end
     if type(reward) == "table" then
         for _, id in ipairs(reward) do
             if self:PlayerHoldsItem(id) then return true end
         end
         return false
     end
-    return reward ~= nil and self:PlayerHoldsItem(reward)
+    return self:PlayerHoldsItem(reward)
 end
 
 -- Combined self-block reason for rolling on itemId, or nil if you may roll. "quest" (you already did
@@ -1202,7 +1209,8 @@ function addon:RefreshPopupItem(f)
     f.icon:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
     f.name:SetText(formatRollItemLabel(link, name, f.itemQuantity))
     if f.mode == "pending" then
-        f.sub:SetText("|cffffffffPrio:|r " .. (self:GetLiveItemPrio({ name = name }) or DEFAULT_PRIO))
+        local lot = f.lotId and self.lootCore and self.lootCore:Get(f.lotId)
+        f.sub:SetText("|cffffffffPrio:|r " .. ((lot and lot.prio) or self:GetLiveItemPrio({ name = name }) or DEFAULT_PRIO))
     end
     if f.roll then f.roll.name = name; f.roll.link = link; f.roll.icon = icon end
     return true
@@ -1306,7 +1314,7 @@ function addon:ShowRollBannerCard(roll)
     local allowed = isPlayerAllowedForRoll(self, roll, playerName)
     local blockReason = self:RollSelfBlockReason(roll.itemId, roll.phantom)
     -- same ML-authority rule as the popup: BiS follows the prio the ML broadcast, not local lists
-    local hasPrio = roll.prio ~= nil and roll.prio ~= "" and roll.prio ~= DEFAULT_PRIO
+    local hasPrio = self:PrioHasListing(roll.prio)
     local avail = util:RollTierAvailability(roll.itemId, allowed, false, blockReason, hasPrio)
     local disabled = {}
     for tier, reason in pairs(avail) do
@@ -1595,7 +1603,7 @@ function addon:ShowPendingPopup(lot, slot)
     f.itemLink = link
     f.name:SetText(formatRollItemLabel(link, name, quantity))
     self:TrackPopupItem(f, lot.itemId, quantity)
-    f.sub:SetText("|cffffffffPrio:|r " .. (self:GetLiveItemPrio({ name = name }) or DEFAULT_PRIO))
+    f.sub:SetText("|cffffffffPrio:|r " .. (lot.prio or self:GetLiveItemPrio({ name = name }) or DEFAULT_PRIO))
     f.count:Hide()
     f.countHover:Hide()
     if f.rollLines then
@@ -1730,7 +1738,7 @@ function addon:StartLiveRoll(lotId)
     if lot.state ~= core.STATE.PENDING then core:Surface(lotId) end
     if not core:StartRoll(lotId) then return end
 
-    local prio = self:GetLiveItemPrio({ name = name })
+    local prio = lot.prio or self:GetLiveItemPrio({ name = name })   -- the stamped prio raiders already hold
     local quantity = core:LiveCount(lotId)
     local rollDuration = getRollDuration()       -- honors the ML's configured Options-tab duration
     local roll = {
@@ -2325,7 +2333,7 @@ function addon:OnDropMessage(fields)
         link = link,
         name = name or link or ("item:" .. tostring(itemId)),
         icon = icon,
-        prio = fields[3] or "",
+        prio = (fields[3] ~= "" and fields[3]) or (lot and lot.prio) or "",
         duration = ROLL_DURATION,
         deadline = GetTime() + (tonumber(fields[4]) or ROLL_DURATION),   -- field 4 = remaining seconds
         quantity = tonumber(fields[5]) or 1,
