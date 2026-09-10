@@ -497,6 +497,41 @@ H.test("AutoClearMatchedOverrides: blind clients never clear without note data",
     addon.db = nil
 end)
 
+H.test("NAMED_ITEMS_SYNC: accepted from the ML or guild leadership only", function()
+    installGuildApi(true)
+    addon.config = fullConfig()
+    addon:InitializeRoster()
+    addon:RefreshGuildRoster()
+    addon.roster.lootMasterName = "Onaqui"
+    addon:SaveNamedItemsText("", true)
+
+    addon:HandleCommMessage("Achera", { "NAMED_ITEMS_SYNC", "Achera", "Grim Toll, Achera > LC" })
+    H.eq(addon:GetNamedRule("Grim Toll"), nil, "Alt-rank sender refused")
+
+    addon:HandleCommMessage("Bosslady", { "NAMED_ITEMS_SYNC", "Bosslady", "Grim Toll, Bosslady > LC" })
+    H.eq(addon:GetNamedRule("Grim Toll").tiers[1].entries[1].playerKey, "bosslady", "leadership sender adopted")
+
+    addon:HandleCommMessage("Onaqui", { "NAMED_ITEMS_SYNC", "Onaqui", "Grim Toll, Onaqui > LC" })
+    H.eq(addon:GetNamedRule("Grim Toll").tiers[1].entries[1].playerKey, "onaqui", "ML sender still adopted")
+end)
+
+H.test("NAMED_ITEMS_SYNC: the ML is told WHO pushed the list, not who the loot master is", function()
+    installGuildApi(true)
+    addon.config = fullConfig()
+    addon:InitializeRoster()
+    addon:RefreshGuildRoster()
+    addon.roster.lootMasterName = "Onaqui"
+    local said = {}
+    local realPrint = addon.Print
+    addon.Print = function(_, msg) said[#said + 1] = tostring(msg) end
+    -- An officer pushes; the message carries the LOOT MASTER's name in field 1, as the sender resolved it.
+    addon:HandleCommMessage("Bosslady", { "NAMED_ITEMS_SYNC", "Onaqui", "Grim Toll, Bosslady > LC" })
+    addon.Print = realPrint
+    H.eq(#said, 1, "one line printed")
+    H.check(said[1]:find("Bosslady", 1, true) ~= nil, "names the sender: " .. said[1])
+    H.eq(said[1]:find("Onaqui", 1, true), nil, "does not credit the loot master for someone else's push")
+end)
+
 H.test("OnRosterOverride: officer gate, officer-sent clear converges", function()
     installGuildApi(true)
     addon.config = fullConfig()

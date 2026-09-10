@@ -544,14 +544,13 @@ end
 --
 -- It is unclear who this push actually serves. Roll prio already rides the DROP wire (the ML computes
 -- GetLiveItemPrio and sends the rendered string), so raiders never consult these rules for a roll; the
--- only raider-side use of the saved rules is the "Loot Council" label on a no-winner result. So today
--- this is near-vestigial. The intended future direction may be the inverse: let leadership/officers
--- push updated rosters and named priorities TO the ML for it to adopt, which would need the opposite
--- gating (an authorized officer sends, the ML accepts and uses it). Until that exists, this is just the
--- ML mirroring its own config outward.
+-- only raider-side use of the saved rules is the "Loot Council" label on a no-winner result. The
+-- real use is the other direction: guild leadership (same rank gate as roster edits) pushes an
+-- updated named-items list and the ML adopts it, so the ML need not be the one holding the LC
+-- decisions. Whole-raid distribution keeps one path for both senders; receivers gate on sender.
 function addon:BroadcastNamedItems()
-    if not self:IsAuthorizedLootMaster() then
-        self:Print("Only the loot master can broadcast named items.")
+    if not (self:IsAuthorizedLootMaster() or self:CanEditRoster()) then
+        self:Print("Only the loot master or guild leadership can broadcast named items.")
         return
     end
 
@@ -678,11 +677,13 @@ function addon:HandleCommMessage(sender, value)
     elseif command == "NAMED_ITEMS_SYNC" then
         local expectedLootMaster = util:NormalizeKey(self:GetLootMasterName() or "")
         local senderKey = util:NormalizeKey(sender or "")
-        if expectedLootMaster ~= "" and senderKey ~= expectedLootMaster then
+        if senderKey ~= expectedLootMaster and not self:IsGuildLeadership(sender) then
             return
         end
         self:SaveNamedItemsText(fields[2] or "", true)
-        self:Print("Named items updated from " .. ((fields[1] ~= "" and fields[1]) or sender or "loot master") .. ".")
+        -- Credit the actual sender. fields[1] is the loot master the SENDER resolved, so an officer's
+        -- push would otherwise tell the ML its own name and read as self-inflicted.
+        self:Print("Named items updated from " .. (sender or "leadership") .. ".")
     elseif command == "ROSTER_SYNC" then
         local expectedLootMaster = util:NormalizeKey(self:GetLootMasterName() or "")
         local senderKey = util:NormalizeKey(sender or "")

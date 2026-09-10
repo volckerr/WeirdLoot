@@ -196,8 +196,8 @@ function addon:ImportRoster()
 end
 
 function addon:ImportNamedItems()
-    if not self:IsAuthorizedLootMaster() then
-        self:Print("Only the loot master can import named items.")
+    if not (self:IsAuthorizedLootMaster() or self:CanEditRoster()) then
+        self:Print("Only the loot master or guild leadership can import named items.")
         return
     end
 
