@@ -662,6 +662,15 @@ test("item id rules: specs work by id too, and BiS is offered for an id-only lis
     eq(w.addon:ItemHasPriority("Reply-Code Alpha", 46053), false, "the other size is still unlisted")
 end)
 
+test("shipped list: the two Reply-Code Alpha sizes carry different priorities, keyed by id", function()
+    local w = makeWorld("Masterlooter", true)
+    local big = strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46053 }))
+    local small = strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46052 }))
+    H.check(big ~= small, "the sizes differ: 25=" .. big .. " 10=" .. small)
+    H.check(big:find("Zenkahi", 1, true) ~= nil, "25-man keeps the full chain")
+    eq(small, "Owlation", "10-man carries its own shorter rule")
+end)
+
 test("display: the spec tail is dropped past two named raiders, but still decides the roll", function()
     local w = makeWorld("Masterlooter", true)
     w.addon:SaveNamedItemsText("Ironmender, Alpha / Bravo > Charlie > shaman restoration > LC", true)

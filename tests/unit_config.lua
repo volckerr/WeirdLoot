@@ -233,4 +233,53 @@ H.test("ItemHasPriority: true when item is in the namedRules map", function()
     H.truthy(addon:ItemHasPriority("Amanitar"), "Amanitar has a named rule")
 end)
 
+-- ---------------------------------------------------------------------------
+-- The SHIPPED default lists (Data/LootPrios.lua). These are generated from the guild sheet by
+-- tools/sheet_named_items.py, so a shorthand the translator does not know would otherwise sail
+-- through as a rule that silently matches nobody, which is the bug these tests exist to stop.
+-- ---------------------------------------------------------------------------
+H.test("shipped spec list: every entry resolves to a real class", function()
+    local rules = addon:ParseTieredRuleText(addon.defaultLootPriorityText or "", addon.ParseClassSpecToken)
+    local count, bad = 0, {}
+    for itemName, rule in pairs(rules) do
+        for _, tier in ipairs(rule.tiers or {}) do
+            for _, entry in ipairs(tier.entries or {}) do
+                count = count + 1
+                if not entry.isRest and (entry.className or "") == "" then
+                    bad[#bad + 1] = itemName .. " -> " .. tostring(entry.raw)
+                end
+            end
+        end
+    end
+    H.check(count > 0, "the shipped spec list is not empty")
+    H.eq(#bad, 0, "unparsed spec tokens: " .. table.concat(bad, ", "))
+end)
+
+H.test("shipped named list: no class or spec word is filed as a player", function()
+    local rules = addon:ParseTieredRuleText(addon.defaultNamedItemsText or "", addon.ParseNamedToken)
+    -- A name that parses as a class/spec is a routing mistake in the extractor, not a raider.
+    local bad = {}
+    for itemName, rule in pairs(rules) do
+        for _, tier in ipairs(rule.tiers or {}) do
+            for _, entry in ipairs(tier.entries or {}) do
+                if entry.playerKey and entry.playerKey ~= "" then
+                    local parsed = addon:ParseClassSpecToken(entry.playerKey)
+                    if parsed and (parsed.className or "") ~= "" then
+                        bad[#bad + 1] = itemName .. " -> " .. entry.playerKey
+                    end
+                end
+            end
+        end
+    end
+    H.eq(#bad, 0, "class text filed as raider names: " .. table.concat(bad, ", "))
+end)
+
+H.test("shipped spec list: the generated-region markers are ignored, not read as items", function()
+    local rules = addon:ParseTieredRuleText(addon.defaultLootPriorityText or "", addon.ParseClassSpecToken)
+    for itemName in pairs(rules) do
+        H.check(not string.find(itemName, "###", 1, true), "marker leaked in as an item: " .. itemName)
+    end
+end)
+
+
 F.endSuite()
