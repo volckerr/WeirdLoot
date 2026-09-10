@@ -287,7 +287,7 @@ function addon:RestoreRollPopup(lot)
     -- The synced lot carries the ML's prio. Only a lot the ML could not stamp yet (item name not in
     -- its cache) falls back to this client's own list rather than "": an empty prio would wrongly
     -- gate BiS as "no priority". A DROP landing later re-asserts via ShowRollBannerCard's dedupe.
-    local prio = lot.prio or (name and self:GetLiveItemPrio({ name = name })) or ""
+    local prio = lot.prio or (name and self:GetLiveItemPrio({ name = name, itemId = lot.itemId })) or ""
     local roll = {
         id = lot.id, itemId = lot.itemId, link = link,
         name = name or link or ("item:" .. tostring(lot.itemId)),
@@ -702,6 +702,16 @@ local function applyInterestButtonAvailability(self, f, roll)
     end
 end
 
+-- Spec names two classes share. The label is the spec word alone, so for these the word does not say
+-- which class and only the class colour does, which is no help in a screenshot or to a colour blind
+-- raider. Name the class for these and these only, keeping every other label short.
+local SHARED_SPEC_NAMES = {
+    frost = true,           -- death knight, mage
+    restoration = true,     -- druid, shaman
+    holy = true,            -- paladin, priest
+    protection = true,      -- paladin, warrior
+}
+
 local function formatLootRuleEntry(entry)
     if not entry then
         return ""
@@ -714,6 +724,9 @@ local function formatLootRuleEntry(entry)
     local label = ""
     if entry.specName and entry.specName ~= "" then
         label = util:TitleCaseWords(entry.specName)
+        if SHARED_SPEC_NAMES[util:NormalizeKey(entry.specName)] and (entry.className or "") ~= "" then
+            label = label .. " " .. util:TitleCaseWords(entry.className)
+        end
     elseif entry.className and entry.className ~= "" then
         label = util:TitleCaseWords(entry.className)
     else
@@ -789,15 +802,11 @@ local function formatNamedRuleDisplay(rule)
         end
     end
 
-    if hasLootCouncil then
-        tiers[#tiers + 1] = "LC"
-    end
-
     if #tiers == 0 then
-        return nil
+        return nil, hasLootCouncil
     end
 
-    return table.concat(tiers, " > ")
+    return table.concat(tiers, " > "), hasLootCouncil
 end
 
 local function highlightInterestButton(f, tier)
@@ -1210,7 +1219,7 @@ function addon:RefreshPopupItem(f)
     f.name:SetText(formatRollItemLabel(link, name, f.itemQuantity))
     if f.mode == "pending" then
         local lot = f.lotId and self.lootCore and self.lootCore:Get(f.lotId)
-        f.sub:SetText("|cffffffffPrio:|r " .. ((lot and lot.prio) or self:GetLiveItemPrio({ name = name }) or DEFAULT_PRIO))
+        f.sub:SetText("|cffffffffPrio:|r " .. ((lot and lot.prio) or self:GetLiveItemPrio({ name = name, itemId = lot and lot.itemId }) or DEFAULT_PRIO))
     end
     if f.roll then f.roll.name = name; f.roll.link = link; f.roll.icon = icon end
     return true
@@ -1603,7 +1612,7 @@ function addon:ShowPendingPopup(lot, slot)
     f.itemLink = link
     f.name:SetText(formatRollItemLabel(link, name, quantity))
     self:TrackPopupItem(f, lot.itemId, quantity)
-    f.sub:SetText("|cffffffffPrio:|r " .. (lot.prio or self:GetLiveItemPrio({ name = name }) or DEFAULT_PRIO))
+    f.sub:SetText("|cffffffffPrio:|r " .. (lot.prio or self:GetLiveItemPrio({ name = name, itemId = lot.itemId }) or DEFAULT_PRIO))
     f.count:Hide()
     f.countHover:Hide()
     if f.rollLines then
@@ -1656,22 +1665,50 @@ local function nextRollId(self)
     return tostring(time()) .. "r" .. self.live.seq
 end
 
+-- Above this many named raiders on one item, the spec tail is left off the shown chain.
+local MAX_NAMES_WITH_SPECS = 2
+
+local function countNamedEntries(rule)
+    local n = 0
+    for _, tier in ipairs((rule and rule.tiers) or {}) do
+        for _, entry in ipairs(tier.entries or {}) do
+            if not entry.isLootCouncil and not entry.isRest then n = n + 1 end
+        end
+    end
+    return n
+end
+
+-- The shown "Prio:" chain. An item can carry BOTH a named rule and a spec rule, and resolution runs
+-- them in that order: a response tier the named rule does not claim falls through to the spec rule.
+-- So both halves are shown, named first, with LC last since it is the final fallback (and the spec
+-- rule narrows who the council picks from, which reads correctly in that position).
 function addon:GetLiveItemPrio(item)
     local itemName = item and item.name
-    local namedRule = itemName and self:GetNamedRule(itemName)
-    if namedRule and namedRule.raw and namedRule.raw ~= "" then
-        local prioText = formatNamedRuleDisplay(namedRule)
-        if not prioText or prioText == "" then
-            prioText = namedRule.raw
-            if self:RuleHasLootCouncil(namedRule) and not string.match(prioText, ">%s*[Ll][Cc]%s*$") then
-                prioText = prioText .. " > LC"
-            end
+    local itemId = item and item.itemId
+    local namedRule = (itemName or itemId) and self:GetNamedRule(itemName, itemId)
+    local lootRule = (itemName or itemId) and self:GetLootRule(itemName, itemId)
+    local specText = formatLootRuleDisplay(lootRule)
+
+    -- A line of pure spec text still parses to a named rule, with a raw string but no entries, so
+    -- the tiers decide whether there is a named half at all. Reading raw here would print the
+    -- unformatted class text and then the formatted spec chain after it.
+    local parts = {}
+    if namedRule and #(namedRule.tiers or {}) > 0 then
+        local namedText, hasLootCouncil = formatNamedRuleDisplay(namedRule)
+        if namedText and namedText ~= "" then parts[#parts + 1] = namedText end
+        -- Past two named raiders the chain gets long enough to be worth trimming, and one of that
+        -- many is very likely to take the item, so the spec tail is dropped from the DISPLAY only.
+        -- Resolution is untouched: the spec rule still decides if every named raider passes.
+        if specText and specText ~= "" and countNamedEntries(namedRule) <= MAX_NAMES_WITH_SPECS then
+            parts[#parts + 1] = specText
         end
-        return prioText
+        if hasLootCouncil then parts[#parts + 1] = "LC" end
+    elseif specText and specText ~= "" then
+        parts[#parts + 1] = specText
     end
 
-    local lootRule = itemName and self:GetLootRule(itemName)
-    return formatLootRuleDisplay(lootRule) or DEFAULT_PRIO   -- no rule: no-prio default bracket order
+    if #parts == 0 then return DEFAULT_PRIO end   -- no rule: no-prio default bracket order
+    return table.concat(parts, " > ")
 end
 
 -- Pending-popup restoration is driven by core events (SyncPendingPopups); this stays as the
@@ -1738,7 +1775,7 @@ function addon:StartLiveRoll(lotId)
     if lot.state ~= core.STATE.PENDING then core:Surface(lotId) end
     if not core:StartRoll(lotId) then return end
 
-    local prio = lot.prio or self:GetLiveItemPrio({ name = name })   -- the stamped prio raiders already hold
+    local prio = lot.prio or self:GetLiveItemPrio({ name = name, itemId = lot.itemId })   -- the stamped prio raiders already hold
     local quantity = core:LiveCount(lotId)
     local rollDuration = getRollDuration()       -- honors the ML's configured Options-tab duration
     local roll = {

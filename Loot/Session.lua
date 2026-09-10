@@ -586,7 +586,7 @@ function addon:StampLotPrios(force)
     for _, lot in ipairs(core:List()) do
         if force or lot.prio == nil then
             local name = util:ItemRender(lot.itemId)
-            if name and core:SetPrio(lot.id, self:GetLiveItemPrio({ name = name })) then
+            if name and core:SetPrio(lot.id, self:GetLiveItemPrio({ name = name, itemId = lot.itemId })) then
                 changed = true
             end
         end
