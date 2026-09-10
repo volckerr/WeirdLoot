@@ -145,6 +145,8 @@ end)
 -- ---------------------------------------------------------------------------
 local GREEN_HEX = "|cff1eff00"
 local function greenLink(id) return GREEN_HEX .. "|Hitem:" .. id .. ":0:0:0:0:0:0:0|h[Green" .. id .. "]|h|r" end
+local BLUE_HEX = "|cff0070dd"
+local function blueLink(id) return BLUE_HEX .. "|Hitem:" .. id .. ":0:0:0:0:0:0:0|h[Blue" .. id .. "]|h|r" end
 local function emptyBags(w)
     w.env.__bags = {}
     for b = 0, 4 do w.env.__bags[b] = { size = 4 } end
@@ -169,6 +171,34 @@ H.test("BuildBagSnapshot (real scan): sub-epic item excluded by the quality>=4 g
     w.env.__bags[0][1] = { id = 50000, count = 5, link = greenLink(50000) }
     local snap = w.addon:_realBuildBagSnapshot()
     H.eq(snap[greenLink(50000)], nil, "green (quality 2) item not in the epic snapshot")
+end)
+
+-- Freya's chest hands the ML a rare-quality BoP container (Alchemist's Cache). The epic floor would
+-- drop it, so addon.ROLL_ANY_QUALITY exempts listed ids; nothing else sub-epic may sneak through.
+H.test("BuildBagSnapshot (real scan): an allowlisted rare is kept, an ordinary rare is not", function()
+    local w = makeWorld("Iter", true)
+    emptyBags(w)
+    w.env.ITEM_QUALITY_COLORS[3] = { hex = BLUE_HEX }
+    local listed = next(w.addon.ROLL_ANY_QUALITY)
+    H.notNil(listed, "the allowlist ships at least one id")
+    w.env.__bags[0][1] = { id = listed, count = 1, link = blueLink(listed) }
+    w.env.__bags[0][2] = { id = 50001, count = 1, link = blueLink(50001) }
+    local snap = w.addon:_realBuildBagSnapshot()
+    H.eq(snap[blueLink(listed)], 1, "the allowlisted rare survives the epic floor")
+    H.eq(snap[blueLink(50001)], nil, "an ordinary rare is still excluded")
+end)
+
+H.test("BuildTradeableEpicCounts (real scan): an allowlisted rare in its trade window is counted", function()
+    local w = makeWorld("Iter", true)
+    emptyBags(w)
+    w.env.ITEM_QUALITY_COLORS[3] = { hex = BLUE_HEX }
+    local listed = next(w.addon.ROLL_ANY_QUALITY)
+    -- BoP with the 2h window, exactly as the cache arrives from the chest
+    w.env.__bags[0][1] = { id = listed, count = 1, link = blueLink(listed), bound = true, win = 7200 }
+    w.env.__bags[0][2] = { id = 50001, count = 1, link = blueLink(50001), bound = true, win = 7200 }
+    local counts = w.addon:_realBuildTradeableEpicCounts()
+    H.eq(counts[blueLink(listed)], 1, "the cache is eligible loot, so a lot can be minted for it")
+    H.eq(counts[blueLink(50001)], nil, "an ordinary rare BoP is not eligible loot")
 end)
 
 H.test("BuildBagSnapshot (real scan): test mode (minQuality 0) includes sub-epic items", function()

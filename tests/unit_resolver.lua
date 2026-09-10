@@ -562,4 +562,127 @@ test("resolver: a class barred from the item is dropped from the rollers", funct
     eq(r.winners[1], "Bob", "barred Alice excluded despite high roll")
 end)
 
+-- ---------------------------------------------------------------------------
+-- Spec-list rules: how a class-only entry matches, and how the prio chain reads.
+-- ---------------------------------------------------------------------------
+local function strip(text) return (tostring(text or ""):gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")) end
+
+local function lootRuleFor(text)
+    local w = makeWorld("RuleParse", true)
+    return w.addon:ParseTieredRuleText("Item, " .. text, w.addon.ParseClassSpecToken)["item"]
+end
+
+test("spec rule: a class written with no spec matches every spec of that class, and nobody else", function()
+    local r = resolveDirect{
+        count = 1,
+        loot = lootRuleFor("rogue"),
+        responses = { Rigul = "ms", Sneak = "ms", Aest = "ms" },
+        profiles = {
+            rigul = { className = "Rogue", specName = "Combat",   status = "main" },
+            sneak = { className = "Rogue", specName = "Subtlety", status = "main" },
+            aest  = { className = "Mage",  specName = "Frost",    status = "main" },
+        },
+        rolls = { aest = 99, rigul = 50, sneak = 40 },
+    }
+    eq(#r.winners, 1, "one winner")
+    eq(r.winners[1], "Rigul", "the mage is filtered out despite the top roll; both rogue specs qualified")
+end)
+
+test("prio chain: an item with names AND specs shows both halves, named first", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveImports(nil, "Bladetwister, rogue", "Bladetwister, Rigul > Notdewbie")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Bladetwister" })), "Rigul > Notdewbie > Rogue",
+       "the spec tier is no longer hidden behind the named tiers")
+end)
+
+test("prio chain: LC stays last, after the spec tier that narrows the council", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveImports(nil, "Constellus, shaman restoration", "Constellus, Volckerr > LC")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Constellus" })), "Volckerr > Restoration Shaman > LC",
+       "LC is the final fallback, so it sorts after the spec tier")
+end)
+
+test("prio chain: a spec name two classes share names its class; the rest stay short", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveImports(nil,
+        "Star-beaded Clutch, shaman restoration / druid restoration / paladin holy\n" ..
+        "Sabatons of Lifeless Night, death knight unholy / death knight frost / paladin retribution", "")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Star-beaded Clutch" })),
+       "Restoration Shaman / Restoration Druid / Holy Paladin", "shared spec names carry their class")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Sabatons of Lifeless Night" })),
+       "Unholy / Frost Death Knight / Retribution",
+       "only Frost is shared here, so only Frost is qualified")
+end)
+
+test("one paste provides both: spec tokens in the named list become spec rules, names stay names", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveNamedItemsText("Ironmender, Curatewf > shaman restoration / druid restoration > LC", true)
+    local named = w.addon:GetNamedRule("Ironmender")
+    local spec = w.addon:GetLootRule("Ironmender")
+    H.notNil(named, "a named rule was made")
+    H.notNil(spec, "a spec rule was made from the same line")
+    eq(named.tiers[1].entries[1].playerKey, "curatewf", "the raider is a named entry")
+    eq(#named.tiers, 2, "the name tier and the LC tier; the spec tier is not one of them")
+    eq(spec.tiers[1].entries[1].className, "shaman", "the spec half landed in the spec rule")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Ironmender" })),
+       "Curatewf > Restoration Shaman / Restoration Druid > LC", "and both halves reach the popup")
+end)
+
+test("a pasted list does not displace shipped spec rules for items it never mentions", function()
+    local w = makeWorld("Masterlooter", true)
+    H.notNil(w.addon:GetLootRule("Inevitable Defeat"), "the shipped rule exists to begin with")
+    w.addon:SaveNamedItemsText("Ironmender, Curatewf", true)
+    H.notNil(w.addon:GetLootRule("Inevitable Defeat"), "an unrelated shipped spec rule survives the paste")
+end)
+
+test("a line of pure player names leaves no empty spec rule behind", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveNamedItemsText("Dark Matter, Rigul > Notdewbie", true)
+    eq(w.addon:GetLootRule("Dark Matter"), nil, "no tier-less spec rule was created")
+end)
+
+test("item id rules: an id-keyed line beats the name, so 10 and 25 can differ", function()
+    local w = makeWorld("Masterlooter", true)
+    -- Reply-Code Alpha: both raid sizes share the name, 46052 is the 10-man drop.
+    w.addon:SaveNamedItemsText("Reply-Code Alpha, Zenkahi / Runereaver > LC\n46052, Owlation", true)
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46053 })),
+       "Zenkahi / Runereaver > LC", "the 25-man copy still reads the name-keyed rule")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46052 })),
+       "Owlation", "the 10-man copy takes the id-keyed rule instead")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha" })),
+       "Zenkahi / Runereaver > LC", "with no id at all the name still answers")
+end)
+
+test("item id rules: specs work by id too, and BiS is offered for an id-only listing", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveNamedItemsText("46052, shaman restoration > LC", true)
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46052 })),
+       "Restoration Shaman > LC", "the spec half routes by id as well")
+    eq(w.addon:ItemHasPriority("Reply-Code Alpha", 46052), true, "id-only listing counts as a priority")
+    eq(w.addon:ItemHasPriority("Reply-Code Alpha", 46053), false, "the other size is still unlisted")
+end)
+
+test("shipped list: the two Reply-Code Alpha sizes carry different priorities, keyed by id", function()
+    local w = makeWorld("Masterlooter", true)
+    local big = strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46053 }))
+    local small = strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46052 }))
+    H.check(big ~= small, "the sizes differ: 25=" .. big .. " 10=" .. small)
+    H.check(big:find("Zenkahi", 1, true) ~= nil, "25-man keeps the full chain")
+    eq(small, "Owlation", "10-man carries its own shorter rule")
+end)
+
+test("display: the spec tail is dropped past two named raiders, but still decides the roll", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveNamedItemsText("Ironmender, Alpha / Bravo > Charlie > shaman restoration > LC", true)
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Ironmender" })), "Alpha / Bravo > Charlie > LC",
+       "three names, so the spec tier is left off the shown chain")
+    local spec = w.addon:GetLootRule("Ironmender")
+    H.notNil(spec, "the spec rule still exists")
+    eq(spec.tiers[1].entries[1].className, "shaman", "and still resolves, it is only hidden")
+
+    w.addon:SaveNamedItemsText("Ironmender, Alpha / Bravo > shaman restoration > LC", true)
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Ironmender" })), "Alpha / Bravo > Restoration Shaman > LC",
+       "two names, so the spec tier is shown")
+end)
+
 F.endSuite()

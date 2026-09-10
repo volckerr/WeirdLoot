@@ -217,7 +217,10 @@ function addon:ParseTieredRuleText(text, parser)
                 end
             end
 
-            local key = util:NormalizeKey(itemName)
+            -- A numeric item column addresses the item by ID. Both raid sizes of a drop share one
+            -- name, so a name-keyed rule cannot tell them apart; the ids can.
+            local key = string.match(itemName, "^%s*(%d+)%s*$")
+            key = key and ("id:" .. key) or util:NormalizeKey(itemName)
             rules[key] = {
                 itemName = itemName,
                 tiers = tiers,
@@ -247,10 +250,25 @@ function addon:ParseNamedToken(token)
             raw = "rest",
         }
     end
+    -- Class and spec text shares the list with player names (one paste provides both), so the named
+    -- pass has to ignore it or it would file "paladin holy" as a raider who never rolls.
+    if self:ParseSpecRuleToken(token) then
+        return nil
+    end
     return {
         raw = token,
         playerKey = util:NormalizeKey(token),
     }
+end
+
+-- ParseClassSpecToken answers for ANY text (className nil when it recognises nothing), which is no
+-- use as a filter. This is the strict form: a token only counts as a spec rule if a class came back.
+function addon:ParseSpecRuleToken(token)
+    local parsed = self:ParseClassSpecToken(token)
+    if parsed and (parsed.className or "") ~= "" then
+        return parsed
+    end
+    return nil
 end
 
 function addon:NormalizeAllConfig()
@@ -273,7 +291,18 @@ function addon:NormalizeAllConfig()
     self.config.rosterEntries = self:NormalizeRosterEntries(rosterEntries)
     self.config.roster = self:BuildRosterMap(self.config.rosterEntries)
     self.config.rosterImportText = self:SerializeRosterEntries(self.config.rosterEntries)
-    self.config.lootRules = self:ParseTieredRuleText(self.config.lootPriorityText or "", self.ParseClassSpecToken)
+    -- One pasted list carries both kinds of token, so it is parsed twice and each pass keeps its own.
+    -- Spec rules from the paste sit on top of the shipped list, which holds the hand-written rules for
+    -- raids the loot sheet does not cover.
+    local lootRules = self:ParseTieredRuleText(self.config.lootPriorityText or "", self.ParseClassSpecToken)
+    for itemKey, rule in pairs(self:ParseTieredRuleText(self.config.namedItemsText or "", self.ParseSpecRuleToken)) do
+        -- A line of pure player names yields a rule with no tiers; that is not a spec rule and must
+        -- not displace the shipped one for the same item.
+        if #(rule.tiers or {}) > 0 then
+            lootRules[itemKey] = rule
+        end
+    end
+    self.config.lootRules = lootRules
     self.config.namedRules = self:ParseTieredRuleText(self.config.namedItemsText or "", self.ParseNamedToken)
 end
 
@@ -523,26 +552,36 @@ function addon:GetRosterOverride(playerName)
     return overrides and overrides[util:NormalizeKey(playerName or "")] or nil
 end
 
-function addon:GetLootRule(itemName)
+-- itemId (optional) is checked first: an id-keyed rule is the more specific statement, and is the
+-- only way to give the 10 and 25 versions of one drop different priorities.
+function addon:GetLootRule(itemName, itemId)
+    if itemId then
+        local byId = self.config.lootRules["id:" .. tostring(itemId)]
+        if byId then return byId end
+    end
     return self.config.lootRules[util:NormalizeKey(itemName or "")]
 end
 
-function addon:GetNamedRule(itemName)
+function addon:GetNamedRule(itemName, itemId)
     -- Session-scoped LC override wins when present: lets the loot master assign a one-off
     -- priority on-the-fly (named raiders all absent, e.g.) without editing the persistent
     -- named-items list. The override is wiped by ClearSession.
     local override = self.GetSessionLCOverride and self:GetSessionLCOverride(itemName)
     if override then return override end
+    if itemId then
+        local byId = self.config.namedRules["id:" .. tostring(itemId)]
+        if byId then return byId end
+    end
     return self.config.namedRules[util:NormalizeKey(itemName or "")]
 end
 
-function addon:ItemHasPriority(itemName)
+function addon:ItemHasPriority(itemName, itemId)
     -- "Listed priority" means the item appears in the spec-priority list (lootRules) or the
     -- named-items list (namedRules, incl. a session LC override). BiS is only offered for such
-    -- items; a generic drop in neither list has no priority to roll BiS against. Keyed by item
-    -- name today; an item-id index is the planned successor.
-    if not itemName or itemName == "" then return false end
-    return (self:GetLootRule(itemName) or self:GetNamedRule(itemName)) and true or false
+    -- items; a generic drop in neither list has no priority to roll BiS against. An id-keyed rule
+    -- wins over the name, so the two raid sizes of one drop can differ.
+    if (not itemName or itemName == "") and not itemId then return false end
+    return (self:GetLootRule(itemName, itemId) or self:GetNamedRule(itemName, itemId)) and true or false
 end
 
 function addon:GetRosterEntries()

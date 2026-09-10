@@ -629,7 +629,7 @@ function addon:ResolveSessionItem(lot)
     local rollers = self:BuildRollerList(lot)
     local allRollerNames = {}
     local allRollerDetails = {}
-    local namedRule = self:GetNamedRule(item.name)
+    local namedRule = self:GetNamedRule(item.name, item.itemId)
     for _, roller in ipairs(rollers) do
         allRollerNames[#allRollerNames + 1] = roller.name
         allRollerDetails[#allRollerDetails + 1] = {
@@ -651,10 +651,15 @@ function addon:ResolveSessionItem(lot)
         local matchedRoll = allRollByName[util:NormalizeKey(detail.name)]
         detail.rollText = matchedRoll and (matchedRoll.auto and "AUTO" or tostring(matchedRoll.roll)) or nil
     end
-    local lootRule = self:GetLootRule(item.name)
+    local lootRule = self:GetLootRule(item.name, item.itemId)
     local defaultSpecPriorityText = lootRule and lootRule.raw or (self:RuleHasLootCouncil(namedRule) and "LC" or nil)
 
     local specMatcher = function(entry, candidate)
+        -- A class written with no spec ("rogue") means every spec of that class. Candidate keys are
+        -- always class plus spec, so such an entry would otherwise match nobody at all.
+        if entry.className and entry.className ~= "" and (entry.specName or "") == "" then
+            return util:NormalizeKey(entry.className) == util:NormalizeKey(candidate.className or "")
+        end
         local keyA = util:NormalizeKey((candidate.className or "") .. " " .. (candidate.specName or ""))
         local keyB = util:NormalizeKey((candidate.specName or "") .. " " .. (candidate.className or ""))
         for _, key in ipairs(entry.matchKeys or {}) do

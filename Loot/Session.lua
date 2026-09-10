@@ -260,6 +260,19 @@ function addon:RebuildLootProjections()
     view.results = results
 end
 
+-- Sub-epic drops the raid still rolls for. The bag scans below only surface epics, so a rare-quality
+-- boss reward would otherwise sit in the ML's bags unrolled. Keyed by item id.
+addon.ROLL_ANY_QUALITY = {
+    [46110] = true,   -- Alchemist's Cache (Freya): BoP rare container of flasks and potions
+}
+
+local function rollableQuality(link, quality, minQuality)
+    if not quality then return false end
+    if quality >= minQuality then return true end
+    local itemId = util:ItemIdFromLink(link)
+    return itemId and addon.ROLL_ANY_QUALITY[itemId] or false
+end
+
 function addon:BuildBagSnapshot()
     local snapshot = {}
     local minQuality = (self.db and self.db.testMode) and 0 or 4   -- test mode: any item
@@ -267,7 +280,7 @@ function addon:BuildBagSnapshot()
     for bag, slot in util:BagSlots() do
         local link = GetContainerItemLink(bag, slot)
         local count, quality = getBagItemCountAndQuality(bag, slot, link)
-        if link and count > 0 and quality and quality >= minQuality then
+        if link and count > 0 and rollableQuality(link, quality, minQuality) then
             snapshot[link] = (snapshot[link] or 0) + count
         end
     end
@@ -342,7 +355,7 @@ function addon:BuildTradeableEpicCounts()
         -- The call also nudges the client to fetch it; OnBagUpdate re-scans shortly (see loading).
         local itemId = GetContainerItemID(bag, slot)
         if itemId and not GetItemInfo(itemId) then loading = true end
-        if testMode and link and count > 0 and quality and quality >= minQuality then
+        if testMode and link and count > 0 and rollableQuality(link, quality, minQuality) then
             -- city testing: any bag item is eligible EXCEPT soulbound ones (those
             -- can't be traded). A trade-window item is soulbound but tradeable, so
             -- still allow it.
@@ -359,7 +372,7 @@ function addon:BuildTradeableEpicCounts()
                     if rem and (not soonest or rem < soonest) then soonest = rem end
                 end
             end
-        elseif link and count > 0 and quality and quality >= minQuality then
+        elseif link and count > 0 and rollableQuality(link, quality, minQuality) then
             -- 3.3.5a GetItemInfo exposes no bind type (only the tooltip lines below do), so bind-on-
             -- equip is read from the tooltip, not the item info.
             local isBindOnEquip = false
@@ -586,7 +599,7 @@ function addon:StampLotPrios(force)
     for _, lot in ipairs(core:List()) do
         if force or lot.prio == nil then
             local name = util:ItemRender(lot.itemId)
-            if name and core:SetPrio(lot.id, self:GetLiveItemPrio({ name = name })) then
+            if name and core:SetPrio(lot.id, self:GetLiveItemPrio({ name = name, itemId = lot.itemId })) then
                 changed = true
             end
         end

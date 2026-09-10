@@ -211,7 +211,7 @@ local function applyLootChoiceAvailability(row, isLocked, isAllowed, itemLink, i
     -- ML authority, same as the popup: BiS follows the prio stamped on the lot. Only an unstamped
     -- lot (the ML had no name for it yet) consults this client's own list.
     local hasPrio
-    if prio ~= nil then hasPrio = addon:PrioHasListing(prio) else hasPrio = addon:ItemHasPriority(itemName) end
+    if prio ~= nil then hasPrio = addon:PrioHasListing(prio) else hasPrio = addon:ItemHasPriority(itemName, itemId) end
     local avail = util:RollTierAvailability(itemLink, isAllowed, isLocked, blockReason, hasPrio)
     for _, option in ipairs(RESPONSE_BUTTONS) do
         local button = row.choiceButtons[option.key]

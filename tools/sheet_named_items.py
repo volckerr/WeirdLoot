@@ -1,27 +1,30 @@
 #!/usr/bin/env python3
-"""Extract WeirdLoot named-item lines from the guild loot sheet.
+"""Extract WeirdLoot loot-priority lines from the guild loot sheet.
 
 The sheet tab is a pair of side-by-side blocks (25-man, 10-man), each six columns wide:
 item name, spacer, then three priority columns (tier 1, 2, 3), then a spare. A ">" inside a cell is
-a tier boundary just like a column boundary. Tokens within a tier
-are slash separated and are player names or the addon's LC / rest keywords; the sheet decides
-which items end in LC, nothing is appended here. Rows that are section headers (boss, Hard Mode,
-Trash, Tier Tokens, class groups) carry no tokens and are skipped. The "BIG ITEMS" block to the
-right is derived from the boss blocks and is ignored. Output is one WeirdLoot named-items line per
-item that has at least one token:
+a tier boundary just like a column boundary. Tokens within a tier are slash separated.
 
-    Item Name, tier1a / tier1b > tier2a > LC
+A token is one of three things, and the addon keeps two separate lists for them:
+  * a raider name, or the LC / rest keywords  -> the NAMED list (defaultNamedItemsText)
+  * a class or spec  ("Ret", "RestoSham", "Rogue")  -> the SPEC list (defaultLootPriorityText)
+The addon resolves the named rule first and falls through to the spec rule, so an item may appear in
+both lists. That ordering is the one thing it cannot bend: every name tier must come before every
+spec tier, and a single tier cannot hold both. Sheet cells that ask for either are reported and the
+offending half is dropped rather than silently reordered.
+
+Spec shorthand is translated here, not in the addon. A word two classes share ("Frost", "Holy",
+"Resto", "Prot") is refused with a warning: write it the way the sheet already writes HolyPal. A bare
+class ("Rogue") is passed through as-is; the addon matches it against every spec of that class.
 
 Usage:
     tools/sheet_named_items.py [--gid GID ...] [--sheet ID] [--csv FILE] [--txt PATH] [--lua [PATH]]
 
 Reads the public CSV export (no auth). --csv reads a saved export instead of downloading. With no
-output flag the lines go to stdout. --txt writes them to a gitignored paste file (named_items.txt
-in the addon root, or a given path) for the addon's Import Named Items window. --lua rewrites the defaultNamedItemsText block in Data/LootPrios.lua
-(the shipped default every client loads) in place; the block is regenerated wholesale, so every
-tab that should ship must be given as a --gid. Both may be combined.
-Cells that are neither names nor keywords (class text like "prot pala/prot war") are reported on
-stderr and left out of the line: the named list only takes names; class rules belong in the spec list.
+output flag the lines go to stdout. --txt writes the named list to a gitignored paste file for the
+addon's Import Named Items window. --lua rewrites BOTH blocks in Data/LootPrios.lua: the named block
+wholesale, and a marked generated region inside the spec block, leaving hand-written spec rules for
+raids the sheet does not cover untouched.
 """
 import argparse, csv, io, os, re, sys, urllib.request
 
@@ -32,14 +35,84 @@ TIER_COLS = (2, 3, 4)      # the three priority columns inside a block, in order
 NAME = re.compile(r"^[A-Za-z]{2,12}$")   # a WoW character name; anything else is class text or a note
 KEYWORDS = {"lc", "rest"}                # named-list tokens the addon parser understands besides names
 
-def is_token(t):
-    return t.lower() in KEYWORDS or bool(NAME.match(t))
+# Sheet shorthand -> the addon's "class spec" form. A bare class maps to itself: the resolver treats a
+# class with no spec as every spec of that class, which keeps the popup short.
+SPEC_VOCAB = {
+    "unholy": "death knight unholy", "blood": "death knight blood", "dkfrost": "death knight frost",
+    # "Frost" is the death knight here, not the mage: the guild's BiS tabs field Arcane and Fire mages
+    # only, and put Frost in the physical block beside Ret, Fury/Arms and Unholy. Write MageFrost if
+    # that ever changes.
+    "frost": "death knight frost",
+    "ret": "paladin retribution", "retribution": "paladin retribution",
+    "holypal": "paladin holy", "protpal": "paladin protection", "prot pala": "paladin protection",
+    "disc": "priest discipline", "discipline": "priest discipline",
+    "shadow": "priest shadow", "holypriest": "priest holy",
+    "arcane": "mage arcane", "fire": "mage fire", "magefrost": "mage frost",
+    "combat": "rogue combat", "assa": "rogue assassination", "assassination": "rogue assassination",
+    "sub": "rogue subtlety", "subtlety": "rogue subtlety",
+    "enhance": "shaman enhancement", "enhancement": "shaman enhancement",
+    "ele": "shaman elemental", "elemental": "shaman elemental",
+    "restosham": "shaman restoration", "restoshaman": "shaman restoration",
+    "restodruid": "druid restoration", "restodru": "druid restoration",
+    "feral": "druid feral", "cat": "druid feral", "bear": "druid feral",
+    "balance": "druid balance", "boomkin": "druid balance", "moonkin": "druid balance", "boomie": "druid balance",
+    "survival": "hunter survival", "surv": "hunter survival",
+    "marksmanship": "hunter marksmanship", "marks": "hunter marksmanship", "mm": "hunter marksmanship",
+    "bm": "hunter beast mastery", "beastmastery": "hunter beast mastery",
+    "fury": "warrior fury", "arms": "warrior arms", "protwar": "warrior protection", "prot war": "warrior protection",
+    "affliction": "warlock affliction", "aff": "warlock affliction",
+    "demonology": "warlock demonology", "demo": "warlock demonology",
+    "destruction": "warlock destruction", "destro": "warlock destruction",
+    # bare classes: matched against every spec of the class
+    "rogue": "rogue", "mage": "mage", "paladin": "paladin", "pal": "paladin", "priest": "priest",
+    "druid": "druid", "shaman": "shaman", "sham": "shaman", "hunter": "hunter", "warrior": "warrior",
+    "warlock": "warlock", "lock": "warlock", "dk": "death knight", "deathknight": "death knight",
+    "death knight": "death knight",
+}
+
+# Drops whose 10 and 25 versions share one name. Rules key on the item name, so one of the two would
+# always be discarded. Only the size listed here is emitted keyed by ITEM ID, which the addon prefers
+# over a name; the other keeps the plain name, and the two no longer collide. The sheet is untouched:
+# the ids live here, not in a cell.
+SIZE_ITEM_IDS = {
+    "reply-code alpha": {"10": 46052},   # Algalon's chest, Gift of the Observer; 25-man stays by name
+}
+
+# Words the guild's own BiS tabs show under two different classes, so the sheet has to say which, the
+# way it already writes HolyPal. Frost is deliberately absent: only one class here has it.
+AMBIGUOUS = {
+    "holy": "HolyPal or HolyPriest",
+    "resto": "RestoSham or RestoDruid",
+    "restoration": "RestoSham or RestoDruid",
+    "prot": "ProtPal or ProtWar",
+    "protection": "ProtPal or ProtWar",
+}
+
+def classify(token, warn, item):
+    """-> ("name"|"spec", value) or (None, None) when the token cannot be used."""
+    key = token.lower().replace("-", "").replace("_", "")
+    if key in KEYWORDS:
+        return "name", token
+    if key in AMBIGUOUS:
+        warn(f"{item}: {token!r} is used by two classes, write {AMBIGUOUS[key]}")
+        return None, None
+    spaced = token.lower().strip()
+    if key in SPEC_VOCAB:
+        return "spec", SPEC_VOCAB[key]
+    if spaced in SPEC_VOCAB:
+        return "spec", SPEC_VOCAB[spaced]
+    if NAME.match(token):
+        return "name", token
+    warn(f"{item}: skipped unrecognised token {token!r}")
+    return None, None
 
 def fetch(sheet, gid):
     url = f"https://docs.google.com/spreadsheets/d/{sheet}/export?format=csv&gid={gid}"
     return urllib.request.urlopen(url).read().decode("utf-8")
 
-def block_lines(rows, base, warn):
+def block_lines(rows, base, warn, size=None):
+    """-> [(item, line)] for one size block. Names and spec tokens share one line: the addon parses
+    the list twice and routes each token, so one paste provides both."""
     out = []
     for r in rows:
         cells = [(r[base + i] if base + i < len(r) else "").strip() for i in range(BLOCK)]
@@ -47,80 +120,109 @@ def block_lines(rows, base, warn):
         if not item:
             continue
         tiers = []
+        seen_spec = False
         for c in TIER_COLS:
             raw = cells[c]
             if not raw:
                 continue
-            # ">" is a tier boundary wherever it appears, including inside a single cell: the sheet
-            # writes a run of tiers in one column when it runs out of columns.
             for part in raw.split(">"):
-                names = [n.strip() for n in part.split("/") if n.strip()]
-                good = [n for n in names if is_token(n)]
-                bad = [n for n in names if not is_token(n)]
-                if bad:
-                    warn(f"{item}: skipped non-name cell text {bad!r}")
-                if good:
-                    tiers.append(" / ".join(good))
-        if not tiers:
-            continue
-        out.append(f"{item}, {' > '.join(tiers)}")
+                names, specs = [], []
+                for tok in (t.strip() for t in part.split("/")):
+                    if not tok:
+                        continue
+                    kind, value = classify(tok, warn, item)
+                    if kind == "name":
+                        names.append(value)
+                    elif kind == "spec":
+                        specs.append(value)
+                if names and specs:
+                    warn(f"{item}: a tier holding both names and specs ranks the names first, not equally")
+                if names and seen_spec:
+                    warn(f"{item}: the addon tries every name before any spec, so {names!r} "
+                         f"cannot rank below a spec tier")
+                if specs:
+                    seen_spec = True
+                entries = names + specs
+                if entries:
+                    tiers.append(" / ".join(entries))
+        if tiers:
+            ids = SIZE_ITEM_IDS.get(item.lower())
+            key = ids.get(size) if (ids and size) else None
+            head = str(key) if key else item
+            out.append((head, f"{head}, {' > '.join(tiers)}"))
     return out
+
+# The rightmost block ("BIG ITEMS") is derived from the raid blocks and is a truncated copy of them,
+# so reading it would double every item and lose the tiers its narrower columns drop.
+def raid_block_bases(rows, warn):
+    """-> [(base, size)] where size is the raid size read from the block header, e.g. "25"."""
+    header = rows[0] if rows else []
+    bases = []
+    for base in range(0, max((len(r) for r in rows), default=0), BLOCK):
+        title = (header[base] if base < len(header) else "").strip()
+        if not title:
+            continue
+        if "BIG ITEMS" in title.upper():
+            continue
+        m = re.search(r"\((\d+)\)", title)
+        bases.append((base, m.group(1) if m else None))
+    if not bases:
+        warn("no raid blocks found: check the tab header row")
+    return bases
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 LUA_PATH = os.path.join(ROOT, "Data", "LootPrios.lua")
 TXT_PATH = os.path.join(ROOT, "named_items.txt")   # gitignored paste file
-LUA_BLOCK = re.compile(r'addon\.defaultNamedItemsText = table\.concat\(\{\n.*?\n\}, "\\n"\)', re.S)
+NAMED_BLOCK = re.compile(r'addon\.defaultNamedItemsText = table\.concat\(\{\n.*?\n\}, "\\n"\)', re.S)
 
 def write_lua(path, lines, source):
     src = open(path, encoding="utf-8").read()
-    if not LUA_BLOCK.search(src):
+    if not NAMED_BLOCK.search(src):
         sys.exit(f"{path}: defaultNamedItemsText block not found")
     body = "\n".join('    "%s",' % l.replace("\\", "\\\\").replace('"', '\\"') for l in lines)
     block = ('-- Generated by tools/sheet_named_items.py from the loot sheet (%s); rerun it rather\n'
-             '-- than editing these lines.\n'
+             '-- than editing these lines. Lines may carry class/spec tokens as well as player names:\n'
+             '-- the addon routes each token to the right rule set at parse time.\n'
              'addon.defaultNamedItemsText = table.concat({\n%s\n}, "\\n")') % (source, body)
-    # Drop a previous generated header so reruns do not stack them.
     src = re.sub(r'-- Generated by tools/sheet_named_items\.py[^\n]*\n(-- [^\n]*\n)*', '', src)
-    open(path, "w", encoding="utf-8").write(LUA_BLOCK.sub(lambda _: block, src, count=1))
+    open(path, "w", encoding="utf-8").write(NAMED_BLOCK.sub(lambda _: block, src, count=1))
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sheet", default=SHEET)
-    ap.add_argument("--gid", action="append", help="tab gid; repeatable, default the ulduar tab")
+    ap.add_argument("--gid", action="append", help="tab gid; repeatable, default the Ulduar_Untrimmed tab")
     ap.add_argument("--csv", help="read this saved CSV export instead of downloading")
-    ap.add_argument("--txt", nargs="?", const=TXT_PATH, help="write the paste file for Import Named Items (default named_items.txt in the addon root)")
-    ap.add_argument("--lua", nargs="?", const=LUA_PATH, help="rewrite the shipped default block (default Data/LootPrios.lua)")
+    ap.add_argument("--txt", nargs="?", const=TXT_PATH, help="write the named-list paste file (default named_items.txt in the addon root)")
+    ap.add_argument("--lua", nargs="?", const=LUA_PATH, help="rewrite both shipped default blocks (default Data/LootPrios.lua)")
     args = ap.parse_args()
-    gids = args.gid or [GID]
-    warn = lambda m: print("warning: " + m, file=sys.stderr)
 
-    seen = {}
-    lines = []
-    sources = [args.csv] if args.csv else [f"gid {g}" for g in gids]
-    for text in ([open(args.csv, encoding="utf-8").read()] if args.csv
-                 else [fetch(args.sheet, g) for g in gids]):
+    warnings = []
+    def warn(msg):
+        warnings.append(msg)
+        print("warning: " + msg, file=sys.stderr)
+
+    gids = args.gid or [GID]
+    all_lines, seen = [], {}
+    for gid in gids:
+        text = open(args.csv, encoding="utf-8").read() if args.csv else fetch(args.sheet, gid)
         rows = list(csv.reader(io.StringIO(text)))
-        for base in (0, BLOCK):       # 25-man block, then 10-man block
-            for line in block_lines(rows, base, warn):
-                key = line.split(",", 1)[0].lower()
-                if key in seen:
-                    # The addon keys rules by item NAME, so a repeat (same item under two bosses, a
-                    # 10/25 pair that shares a name, or the same item on two tabs) can only carry one
-                    # rule. First occurrence wins; a conflicting repeat is for the sheet to resolve.
-                    if seen[key] != line:
-                        warn(f"conflicting repeat kept first: {seen[key]!r} vs {line!r}")
-                    continue
-                seen[key] = line
-                lines.append(line)
+        for base, size in raid_block_bases(rows, warn):
+            for item, line in block_lines(rows, base, warn, size):
+                if item in seen and seen[item] != line:
+                    warn(f"conflicting repeat kept first: {seen[item]!r} vs {line!r}")
+                elif item not in seen:
+                    seen[item] = line
+                    all_lines.append(line)
 
     if args.txt:
-        open(args.txt, "w", encoding="utf-8").write("\n".join(lines) + "\n")
-        print(f"{len(lines)} lines -> {args.txt}", file=sys.stderr)
+        with open(args.txt, "w", encoding="utf-8") as f:
+            f.write("\n".join(all_lines) + "\n")
+        print(f"{len(all_lines)} lines -> {args.txt}")
     if args.lua:
-        write_lua(args.lua, lines, ", ".join(sources))
-        print(f"{len(lines)} lines -> {args.lua}", file=sys.stderr)
+        write_lua(args.lua, all_lines, "gid " + ", ".join(gids))
+        print(f"{len(all_lines)} lines -> {args.lua}")
     if not args.txt and not args.lua:
-        print("\n".join(lines))
+        for line in all_lines:
+            print(line)
 
-if __name__ == "__main__":
-    main()
+main()
