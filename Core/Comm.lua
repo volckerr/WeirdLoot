@@ -526,6 +526,11 @@ function addon:RequestSessionSync()
         return
     end
     if not self.syncChannel then return end
+    -- The resolved ML can be this very player while the fresh-session prompt holds authority back;
+    -- a request would only whisper ourselves until the retry budget runs out.
+    if util:NormalizeKey(self:GetLootMasterName() or "") == util:NormalizeKey(util:GetPlayerName("player")) then
+        return
+    end
     -- WeirdSync defers the request if the loot master is not resolved yet (common right after a
     -- reload, before loot-method/roster data settles) and fires it the moment it is, so a
     -- reloading raider always ends up requesting a sync instead of silently giving up.

@@ -3319,6 +3319,8 @@ test("ml-prompt: resolving as ML with an active session asks, and withholds auth
     w.addon:RefreshLootAuthority()                           -- retry-loop re-resolves do not re-ask
     w.addon:RecheckLootAuthority()
     eq(#F.WIRE, 0, "nothing broadcast while held")
+    w.addon:RequestSessionSync()                             -- the raider-mode path would target the ML: ourselves
+    eq(#F.WIRE, 0, "no sync request whispered to ourselves while held")
     eq(w.addon.session.id, "5", "session untouched while held")
 end)
 
