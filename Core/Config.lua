@@ -378,6 +378,7 @@ function addon:SaveImports(rosterText, lootText, namedText)
     self.config.namedItemsText = namedText or self.config.namedItemsText or ""
     self.config.revision = (self.config.revision or 0) + 1
     self:NormalizeAllConfig()
+    if self.RestampLotPrios then self:RestampLotPrios() end
     self:RefreshRoster()
     self:TriggerCallback("CONFIG_UPDATED")
     self:Print("Configuration saved.")
@@ -427,6 +428,7 @@ function addon:SaveNamedItemsText(namedText, suppressPrint)
     self.config.namedItemsText = namedText or ""
     self.config.revision = (self.config.revision or 0) + 1
     self:NormalizeAllConfig()
+    if self.RestampLotPrios then self:RestampLotPrios() end
     self:RefreshRoster()
     self:TriggerCallback("CONFIG_UPDATED")
     if not suppressPrint then

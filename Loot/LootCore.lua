@@ -169,6 +169,17 @@ function LootCore:DrainDirty()
     return ids
 end
 
+-- The rendered priority string for a lot ("A > B / C > LC", or the no-prio bracket order). Stamped
+-- by the ML host (the core knows no rules) and carried on the wire so every raider surface reads the
+-- ML's answer, never its own list. Marks dirty without emitting: the host stamps inside its own
+-- ledgerChanged handler and flushes explicitly when a rule change re-stamps.
+function LootCore:SetPrio(id, prio)
+    local lot = self.lots[id]; if not lot or lot.prio == prio then return false end
+    lot.prio = prio
+    self:markDirty(id)
+    return true
+end
+
 function LootCore:Flush() self:emit("ledgerChanged") end
 
 -- wipe the ledger (new/cleared session). Keeps wiring (resolver/ML) intact.
