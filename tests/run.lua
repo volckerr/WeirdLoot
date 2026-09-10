@@ -2513,6 +2513,18 @@ test("roll block: Reply-Code Alpha is blocked once you hold ANY of its four choi
     eq(w.addon:RollSelfBlockReason(46053), "quest", "a banked 25-man choice reward blocks the 25-man code")
 end)
 
+test("roll block: holding the Archivum Data Disc itself blocks a second one (no Unique limit, no reward yet)", function()
+    local w = makeWorld("Saelinen", false)
+    eq(w.addon:RollSelfBlockReason(45857), nil, "25-man disc not blocked with nothing held")
+    w.env.__bank[45857] = 1                         -- looted one last week, quest not turned in (bank counts as held)
+    eq(w.addon:RollSelfBlockReason(45857), "quest", "a held disc blocks the same disc")
+    eq(w.addon:RollSelfBlockReason(45506), nil, "the 10-man disc is a different item")
+    eq(w.addon:RollSelfBlockReason(40004), nil, "an unrelated item is unaffected")
+    w.env.__bank[45857] = nil
+    w.env.__bank[45798] = 1                         -- chain finished: Heroic Celestial Planetarium Key
+    eq(w.addon:RollSelfBlockReason(45857), "quest", "the reward still blocks once the disc is gone")
+end)
+
 -- ===========================================================================
 -- ADVERSARIAL / FAILURE-MODE cases (where things break, by design or as a known gap)
 -- ===========================================================================

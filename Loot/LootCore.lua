@@ -169,6 +169,8 @@ function LootCore:DrainDirty()
     return ids
 end
 
+function LootCore:Flush() self:emit("ledgerChanged") end
+
 -- wipe the ledger (new/cleared session). Keeps wiring (resolver/ML) intact.
 function LootCore:Reset()
     -- A reset wipes the ledger and restarts lot ids at L:1 (e.g. Start Session over an

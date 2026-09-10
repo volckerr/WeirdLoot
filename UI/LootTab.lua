@@ -358,7 +358,7 @@ function addon:BuildLootTab()
                 -- hold/quest checks match on the numeric item id
                 local blockReason = option.key ~= "pass" and addon:RollSelfBlockReason(row.item.itemId, row.item.phantom)
                 if blockReason == "quest" then
-                    addon:Print("You have already completed that quest. You may only pass.")
+                    addon:Print("You already hold that quest item or completed its quest. You may only pass.")
                     return
                 elseif blockReason == "unique" then
                     addon:Print("You already have that unique item. You may only pass.")

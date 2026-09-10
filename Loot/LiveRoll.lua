@@ -640,7 +640,7 @@ local DISABLED_REASON_TEXT = {
     type = "Not used for this item type.",
     class = "Your class cannot use this item.",
     unique = "You already have this unique item.",
-    quest = "You have already completed this quest.",
+    quest = "You already hold this quest item or completed its quest.",
     mount = "You have already learned this mount.",
     noprio = "No priority is listed for this item.",
 }
@@ -1164,16 +1164,20 @@ addon.ROLL_REWARD_GATE = {
 }
 
 -- You already hold the quest reward this drop grants (any of them, for a choice reward), so you
--- finished the quest -> don't roll on it.
+-- finished the quest; or you still hold the DROP itself (a quest starter the server keeps until the
+-- turn-in, and one that carries no Unique limit, like the Archivum Data Disc), so a second copy is
+-- useless to you and, once the quest is started, unlootable. Either way: don't roll on it.
 function addon:OwnsQuestReward(itemId)
     local reward = self.ROLL_REWARD_GATE[itemId]
+    if reward == nil then return false end
+    if self:PlayerHoldsItem(itemId) then return true end
     if type(reward) == "table" then
         for _, id in ipairs(reward) do
             if self:PlayerHoldsItem(id) then return true end
         end
         return false
     end
-    return reward ~= nil and self:PlayerHoldsItem(reward)
+    return self:PlayerHoldsItem(reward)
 end
 
 -- Combined self-block reason for rolling on itemId, or nil if you may roll. "quest" (you already did
