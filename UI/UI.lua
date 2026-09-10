@@ -131,10 +131,23 @@ local function createTextWindow(name, width, height, titleText, options)
         end)
     end
 
+    -- Optional second button left of Save. It only rewrites the edit box, so a mispaste is undone
+    -- by looking at the restored text and then choosing to Save it.
+    local restoreButton
+    if options.showRestoreButton then
+        restoreButton = createButton(frame, options.restoreButtonText or "Restore Default", 130, 22)
+        if saveButton then
+            restoreButton:SetPoint("RIGHT", saveButton, "LEFT", -8, 0)
+        else
+            restoreButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -14, 12)
+        end
+    end
+
     frame.title = title
     frame.scroll = scroll
     frame.editBox = editBox
     frame.saveButton = saveButton
+    frame.restoreButton = restoreButton
     return frame
 end
 

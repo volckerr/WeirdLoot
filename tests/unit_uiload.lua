@@ -140,6 +140,30 @@ H.test("export/import entry points are defined and run", function()
     H.check(true, "ExportWinners + ExportLog build their windows without error")
 end)
 
+H.test("import named items: Restore Default refills the box with the shipped list, and does not save", function()
+    local w = uiWorld()
+    w.addon:InitializeUI()
+    w.addon.config.namedItemsText = "Mispasted, garbage"
+    w.addon:ImportNamedItems()
+    local win = w.addon.ui.importWindows and w.addon.ui.importWindows.NamedItems
+    H.notNil(win, "the named-items import window was built")
+    H.notNil(win.restoreButton, "it carries a Restore Default button")
+    H.eq(win.editBox:GetText(), "Mispasted, garbage", "the box opens on the saved list")
+
+    win.restoreButton:GetScript("OnClick")()
+    H.eq(win.editBox:GetText(), w.addon.defaultNamedItemsText, "the box now holds the shipped list")
+    H.eq(w.addon.config.namedItemsText, "Mispasted, garbage", "restoring alone does not save; Save still has to be pressed")
+end)
+
+H.test("import roster has no Restore Default button (no shipped default to fall back to)", function()
+    local w = uiWorld()
+    w.addon:InitializeUI()
+    w.addon:ImportRoster()
+    local win = w.addon.ui.importWindows and w.addon.ui.importWindows.Roster
+    H.notNil(win, "the roster import window was built")
+    H.eq(win.restoreButton, nil, "no restore button where there is no shipped list")
+end)
+
 -- UI/Minimap.lua: the extracted minimap button + owed-loot glow.
 H.test("minimap entry points are defined and run", function()
     local w = uiWorld()
