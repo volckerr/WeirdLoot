@@ -314,6 +314,18 @@ H.test("missing quest drop with an unreadable difficulty: honest alert, nothing 
     H.check(w.addon.lootCore:openPhantomLotForItem(45857) ~= nil, "minted on the retry")
 end)
 
+H.test("autoloot: a raid-banked unbound item (Runed Orb) goes to the ML; other unbound loot is left", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    w.addon.db.deer = "Deer"
+    local given = mockLootWindow(w, { { itemId = 45087, bind = nil, quality = 3 }, { itemId = 50003, bind = "boe", quality = 3 }, { itemId = 50004, bind = nil, quality = 3 } },
+        OTHER_GUID, { "Masterlooter", "Deer" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(#given, 2, "both BoE slots routed")
+    H.eq(given[1].idx, 1, "Runed Orb -> ML")
+    H.eq(given[2].idx, 2, "other rare BoE -> disenchanter")
+end)
+
 H.test("resolved phantom: re-opening the corpse assigns to the winner, records + whispers on clear", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
