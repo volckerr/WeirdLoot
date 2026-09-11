@@ -71,6 +71,21 @@ addon.AUTOLOOT_TO_ML = {
     [45087] = true,   -- Runed Orb (Ulduar)
 }
 
+-- Items the ML never picks up, whatever their binding or quality. The slot is left in the corpse so
+-- the raid can settle it by hand: a fragment the ML self-assigns binds to the ML and cannot be
+-- traded back out, and lots mint from the ML's bags, so holding one would also start a roll for it.
+-- Keyed by item id.
+addon.AUTOLOOT_NEVER = {
+    [45038] = true,   -- Fragment of Val'anyr (Ulduar)
+}
+
+-- Every path that could put a loot slot in someone's bags asks this first.
+function addon:LootSlotIsBanned(slot)
+    local link = slot and GetLootSlotLink(slot)
+    local itemId = link and util:ItemIdFromLink(link)
+    return (itemId and self.AUTOLOOT_NEVER[itemId]) or false
+end
+
 function addon:LOOT_OPENED()
     local session = self:GetCurrentSession()
     if not session.active or not self:IsMasterLooter() then return end
@@ -100,7 +115,10 @@ function addon:LOOT_OPENED()
             local target
             local link = GetLootSlotLink(slot)
             local itemId = link and util:ItemIdFromLink(link)
-            if itemId and self.AUTOLOOT_TO_ML[itemId] then
+            if itemId and self.AUTOLOOT_NEVER[itemId] then
+                target = nil                                      -- banned: left in the corpse
+                self:Print((link or "That item") .. " is never auto-looted. Leave it in the corpse and settle it by hand.")
+            elseif itemId and self.AUTOLOOT_TO_ML[itemId] then
                 target = selfIdx                                  -- raid-banked -> ML
             elseif bind == "bop" then
                 -- A pure-Unique we already hold cannot be self-assigned: GiveMasterLoot silently
@@ -144,6 +162,9 @@ function addon:LOOT_BIND_CONFIRM(slot)
         local link = slot and GetLootSlotLink(slot)
         if not link or util:ItemIdFromLink(link) ~= loan.itemId then return end
     end
+    -- A banned item never gets its bind prompt eaten. Nothing here assigns it, so the popup can only
+    -- come from the ML clicking it by hand, and that is the last chance to back out.
+    if self:LootSlotIsBanned(slot) then return end
     if slot then
         bindQueue[slot] = true
         bindDispatcher:Show()

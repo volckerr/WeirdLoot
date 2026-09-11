@@ -326,6 +326,42 @@ H.test("autoloot: a raid-banked unbound item (Runed Orb) goes to the ML; other u
     H.eq(given[2].idx, 2, "other rare BoE -> disenchanter")
 end)
 
+-- Fragment of Val'anyr is BoP legendary, so every branch below would otherwise route it to the ML.
+-- addon.AUTOLOOT_NEVER bans it outright: the slot stays in the corpse for a manual assign.
+H.test("autoloot: a banned item is left in the corpse; the BoP beside it still goes to the ML", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local banned = next(w.addon.AUTOLOOT_NEVER)
+    H.check(banned ~= nil, "ban list is populated")
+    local given = mockLootWindow(w, { { itemId = banned, bind = "bop", quality = 5 }, { itemId = 50005, bind = "bop", quality = 4 } },
+        OTHER_GUID, { "Masterlooter" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(#given, 1, "exactly one slot routed")
+    H.eq(given[1].slot, 2, "the banned slot was skipped, the plain BoP was taken")
+end)
+
+-- A banned item can still reach the ML's bags one way: the ML clicks it in the loot window itself.
+-- The addon refuses to auto-confirm that bind prompt, so the "this will bind to you" dialog stands.
+H.test("autoloot: a banned item keeps its bind prompt; a normal slot is still auto-confirmed", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local banned = next(w.addon.AUTOLOOT_NEVER)
+    local confirmed = {}
+    w.env.ConfirmLootSlot = function(slot) confirmed[#confirmed + 1] = slot end
+    w.env.StaticPopup_Hide = function() end
+    mockLootWindow(w, { { itemId = banned, bind = "bop", quality = 5 }, { itemId = 50006, bind = "bop", quality = 4 } },
+        OTHER_GUID, { "Masterlooter" }, "Kologarn")
+
+    w.addon:LOOT_BIND_CONFIRM(1)
+    H.pump(w, 1.0)
+    H.eq(#confirmed, 0, "the banned slot's prompt is left standing")
+
+    w.addon:LOOT_BIND_CONFIRM(2)
+    H.pump(w, 1.0)
+    H.eq(#confirmed, 1, "a normal BoP is still confirmed for us")
+    H.eq(confirmed[1], 2, "and it is the right slot")
+end)
+
 H.test("resolved phantom: re-opening the corpse assigns to the winner, records + whispers on clear", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)

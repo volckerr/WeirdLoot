@@ -261,7 +261,7 @@ function addon:TryPhantomSends()
     local obs = self.lootObs
     if not obs or not next(self.phantomSends or {}) then return end
     for slot, s in pairs(obs.slots) do
-        if not s.cleared and not obs.assigning[slot] then
+        if not s.cleared and not obs.assigning[slot] and not self.AUTOLOOT_NEVER[s.itemId] then
             local lotId, send = self:PhantomSendForItem(s.itemId)
             if lotId then
                 local idx = self:FindMasterLootCandidate(send.target)
