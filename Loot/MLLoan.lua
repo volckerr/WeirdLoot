@@ -314,7 +314,7 @@ function addon:BorrowerLoanPickup(loan)
         if LootSlotIsItem(slot) then
             local link = GetLootSlotLink(slot)
             local itemId = link and util:ItemIdFromLink(link)
-            if itemId == loan.itemId then
+            if itemId == loan.itemId and not self.AUTOLOOT_NEVER[itemId] then
                 GiveMasterLoot(slot, selfIdx)
             end
         end
