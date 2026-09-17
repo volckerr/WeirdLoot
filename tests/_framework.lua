@@ -280,11 +280,13 @@ function self.makeWorld(playerName, isML, globals)
     -- Mirror the client's addon metadata: read the real `## Version:` from the .toc so addon.version in
     -- tests matches what ships (the addon pulls its version from here too). cwd is the addon root.
     env.GetAddOnMetadata = function(_, key)
-        if key ~= "Version" then return nil end
+        -- Any "## <key>:" directive, not just Version: the version notifier also reads X-MinVersion.
+        if type(key) ~= "string" or key == "" then return nil end
         local f = io.open("WeirdLoot.toc", "r")
         if not f then return nil end
+        local pattern = "^## " .. key:gsub("(%W)", "%%%1") .. ":%s*(.-)%s*$"
         local v
-        for line in f:lines() do v = line:match("^## Version:%s*(.-)%s*$"); if v then break end end
+        for line in f:lines() do v = line:match(pattern); if v then break end end
         f:close()
         return v
     end
@@ -548,6 +550,7 @@ self.ADDON_FILES = {
     "Libs/WeirdSync-1.0/WeirdSync-1.0.lua",
     "Core.lua",
     "Core/Util.lua", "Core/Config.lua", "Core/Comm.lua", "Core/Roster.lua", "Core/GuildRoster.lua",
+    "Core/VersionNag.lua",
     "Data/BlacklistPresets.lua",
     "Data/BlacklistPresets/Priest.lua", "Data/BlacklistPresets/Mage.lua",
     "Data/BlacklistPresets/Warrior.lua", "Data/BlacklistPresets/DeathKnight.lua",
