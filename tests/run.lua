@@ -1024,6 +1024,55 @@ test("payout vs bags: a stale owe for an unheld item is cleared by the bag scan 
     eq(owedCount(w), 0, "the bag scan forgave the unheld owe -- no core history needed")
 end)
 
+test("zone-in: a staged bag read neither drains the ledger nor re-mints it as fresh auto-rolled loot", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+
+    -- the raid already rolled this drop: Alice won it and the ML still holds her copy
+    local lotId = resolveOwedTo(w, 40005, "alice")
+    local core = w.addon.lootCore
+    w.addon.db.options.autoStartRoll = true          -- raid-night setting: fresh loot rolls itself out
+    eq(#lotsFor(w, 40005), 1, "one lot for the item")
+    eq(owedCount(w), 1, "Alice is owed her win")
+    clearWire()
+
+    -- a loading screen (released to a graveyard outside the instance, then ran back in). The server
+    -- re-stages the bags, so the scan reads short -- here, nothing at all.
+    w.addon:ArmBagSettle()
+    setBag(w, 40005, 0)
+    eq(w.addon:OnBagUpdate(), false, "no reconcile runs against a staging bag read")
+    eq(#lotsFor(w, 40005), 1, "the short read did not retire the copy")
+    eq(owedCount(w), 1, "Alice's owe survived the short read")
+
+    -- the real bags arrive and the window closes: one scan, against the truth
+    setBag(w, 40005, 1)
+    F.advanceClock(6)
+    bagUpdate(w)
+
+    eq(#lotsFor(w, 40005), 1, "no second lot minted for loot the raid already rolled")
+    eq(core:Get(lotId).state, core.STATE.RESOLVED, "the original resolved lot is still the live one")
+    eq(owedCount(w), 1, "Alice is still owed")
+    for _, lot in ipairs(lotsFor(w, 40005)) do
+        check(lot.state ~= core.STATE.ROLLING and lot.state ~= core.STATE.NEW,
+            "nothing was re-broadcast for rolling")
+    end
+
+    -- the wiring: only the real loading screen arms the window (SetDisabled calls the same handler
+    -- directly for its catch-up and must not fake one)
+    w.addon.bagSettleAt = 0
+    local ran = false
+    local realPEW = w.addon.PLAYER_ENTERING_WORLD
+    w.addon.PLAYER_ENTERING_WORLD = function() ran = true end
+    w.addon.events:GetScript("OnEvent")(w.addon.events, "PLAYER_ENTERING_WORLD")
+    w.addon.PLAYER_ENTERING_WORLD = realPEW
+    check(ran, "the zone-in handler still runs")
+    check(w.addon.bagSettleAt > F.CLOCK, "the loading screen re-armed the bag settle window")
+
+    -- no deadline at all must read as settled, never as a refusal that re-arms itself forever
+    w.addon.bagSettleAt = nil
+    eq(w.addon:OnBagUpdate(), true, "a missing settle deadline still reconciles")
+end)
+
 test("trade-expiry timer arms 5s after the soonest window, clears when nothing is windowed", function()
     local w = makeWorld("Masterlooter", true)
     w.addon:ArmTradeExpiryTimer(120)

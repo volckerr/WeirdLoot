@@ -786,18 +786,24 @@ function addon:OnBagUpdate()
         return false
     end
 
+    -- Bag settle window (ArmBagSettle): inside it the staged bag load under-reports what we hold, so
+    -- there is no reconcile to run and no baseline worth taking. Reconciling anyway would retire live
+    -- lots as gone (terminal removed awards, owes forgiven) and then re-mint them as fresh drops once
+    -- the real bags land, which auto-rolls loot the raid already rolled. Leave the ledger and the
+    -- freshness baseline untouched and take one scan against the truth when the window closes.
+    -- A missing deadline reads as settled: the alternative is refusing forever while the rescan
+    -- re-arms itself every tenth of a second, which would stop tracking loot with nothing said.
+    if self.bagSettleAt and GetTime() < self.bagSettleAt then
+        self:ScheduleSettleRescan()
+        return false
+    end
+
     local eligible = self:ItemIdCounts(self:BuildTradeableEpicCounts())
 
-    -- Post-login settle window: bags load in STAGES after a login/reload. While inside it we
-    -- still reconcile (to baseline counts) but mark nothing fresh, so staged-loading items are
-    -- never mistaken for fresh drops and auto-surfaced.
-    local settled = self.bagSettleAt and (GetTime() >= self.bagSettleAt)
     local prev = session.prevEligible or {}
     local fresh = {}
-    if settled then
-        for itemId, count in pairs(eligible) do
-            if count > (prev[itemId] or 0) then fresh[itemId] = true end
-        end
+    for itemId, count in pairs(eligible) do
+        if count > (prev[itemId] or 0) then fresh[itemId] = true end
     end
     session.prevEligible = eligible
 
@@ -807,9 +813,9 @@ function addon:OnBagUpdate()
     self.lootCore:Reconcile(eligible, fresh, protectOwed) -- ledgerChanged -> projections + auto-surface (LiveRoll)
 
     -- Reconcile the payout owe ledger against the same bag truth: an owe we can no longer back with
-    -- a held copy is nothing to owe. Only once bags have settled (so staged-loading items are not
-    -- read as gone) and no trade is mid-flight (an owed copy in the trade window is mid-delivery).
-    if settled and not protectOwed and self.ReconcilePayoutAgainstBags then
+    -- a held copy is nothing to owe. Not while a trade is mid-flight (an owed copy in the trade window
+    -- is mid-delivery).
+    if not protectOwed and self.ReconcilePayoutAgainstBags then
         self:ReconcilePayoutAgainstBags(eligible)
     end
 
@@ -820,10 +826,7 @@ function addon:OnBagUpdate()
     -- This scan saw an item whose data had not loaded yet, so it could not be classified/surfaced.
     -- Re-scan shortly (the scan above already nudged the fetch) so it pops the moment the data lands,
     -- instead of waiting for the next loot or the 60s reconcile. A clean scan resets the retry budget.
-    -- Only once settled: during the post-login bag load the whole bag reads cold, and surfacing is
-    -- suppressed there anyway, so retrying then is pure churn. In a raid bags are long settled, so the
-    -- genuine case (a fresh drop whose data lags) is unaffected.
-    if settled and self._sawLoadingItem then
+    if self._sawLoadingItem then
         self:ScheduleLoadRetry()
     else
         self._loadRetries = 0
@@ -878,6 +881,14 @@ end)
 -- BAG_UPDATE so the scan lands BAG_SETTLE after the last event, draining the whole loot sweep at once.
 function addon:ScheduleBagReconcile()
     self._bagReconcileAt = GetTime() + BAG_SETTLE
+    bagDebounce:Show()
+end
+
+-- One scan the moment the bag settle window closes. OnBagUpdate refuses to act while the bags are
+-- still staging, so something has to bring the ledger back to bag truth afterwards; without this the
+-- 60s periodic reconcile is the only backstop and a lapsed trade window can linger that long.
+function addon:ScheduleSettleRescan()
+    self._bagReconcileAt = (self.bagSettleAt or GetTime()) + 0.1
     bagDebounce:Show()
 end
 
