@@ -115,6 +115,9 @@ local function onEvent(self, event, ...)
     -- Live toggle: while disabled the addon ignores every game event (see IsDisabled). Login still
     -- runs so state and the switches exist; SetDisabled(false) then catches up via PLAYER_ENTERING_WORLD.
     if event ~= "PLAYER_LOGIN" and addon:IsDisabled() then return end
+    -- Only the real event means the server is re-staging our bags. SetDisabled's catch-up calls the
+    -- same handler directly and must not open a staging window: nothing reloaded there.
+    if event == "PLAYER_ENTERING_WORLD" then addon:ArmBagSettle() end
     if addon[event] then
         addon[event](addon, ...)
     end
@@ -320,7 +323,7 @@ function addon:PLAYER_LOGIN()
         end,
     })
     self.sessionDb = WeirdLootSessionDB
-    self.bagSettleAt = GetTime() + 5   -- ignore bag deltas (staged loading) until bags settle this login
+    self:ArmBagSettle()   -- ignore bag reality until the staged post-login bag load finishes
 
     if self.sessionDb.activeSession ~= nil then
         local legacySession = self.sessionDb.activeSession
@@ -371,6 +374,18 @@ function addon:PLAYER_LOGIN()
     self:RefreshAll()
     self:ResumePayoutMode()      -- a session restored from SavedVariables keeps payout mode on
     self:Print("Loaded. Use /weirdloot to open the window.")
+end
+
+-- Bag settle window. The server sends bag contents in STAGES, after a login/reload AND after every
+-- loading screen (a zone change, which includes releasing to a graveyard outside the instance). Inside
+-- that window a whole bag can read as empty (GetContainerNumSlots 0) and a freshly-arrived item reads
+-- cold, so the scan under-reports what the ML is holding. Acting on that read is wrong in both
+-- directions: it retires live lots as gone, and the real bags landing afterwards then read as brand new
+-- drops (auto-rolled). Every staging transition re-arms this window and the bag pipeline refuses to act
+-- until it closes (OnBagUpdate, ResumePayoutMode).
+local BAG_SETTLE_WINDOW = 5
+function addon:ArmBagSettle()
+    self.bagSettleAt = GetTime() + BAG_SETTLE_WINDOW
 end
 
 -- Zone-in prompt (RCLootCouncil model): on entering a raid instance as the loot
@@ -480,7 +495,7 @@ end
 function addon:PLAYER_ENTERING_WORLD()
     self:RefreshAll()
     if self:IsAuthorizedLootMaster() then
-        self:OnBagUpdate()              -- drop items whose trade window lapsed while away, before broadcasting
+        self:OnBagUpdate()              -- deferred while the bags re-stage; that pass drops items whose trade window lapsed while away
         self:AutoBroadcastSession(true)
         self:RestorePendingPopups()     -- re-show pending items the ML hadn't decided on
     else
