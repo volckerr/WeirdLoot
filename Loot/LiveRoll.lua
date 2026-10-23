@@ -2047,7 +2047,7 @@ end
 -- The award-candidate list for an LC card (ML only): every roller (bracket + roll), in bracket-priority
 -- order, PLUS any named-rule candidate who is in the raid but did not roll (no roll, tagged "Named").
 -- Clicking a row awards the next copy to that person (AwardLootCouncilCopy).
-function addon:LootCouncilCandidates(itemName, sections)
+function addon:LootCouncilCandidates(itemName, sections, itemId)
     local list, seen = {}, {}
     for _, s in ipairs(sections or {}) do
         for _, m in ipairs(s.members) do
@@ -2064,7 +2064,7 @@ function addon:LootCouncilCandidates(itemName, sections)
             end
         end
     end
-    local rule = self:GetNamedRule(itemName)
+    local rule = self:GetNamedRule(itemName, itemId)
     if rule and rule.tiers then
         for _, tier in ipairs(rule.tiers) do
             for _, entry in ipairs(tier.entries or {}) do
@@ -2129,7 +2129,7 @@ function addon:ShowLootCouncilCard(lotId)
     end
 
     local item = applyPhantomTag(self:BannerLootCouncilItem({ id = lotId, link = link, icon = icon, quantity = total }, sections))
-    item.candidates = self:LootCouncilCandidates(name, sections)
+    item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
     item.copiesTotal = total
     item.copiesRemaining = remaining
     item.awarded = awarded
@@ -2210,7 +2210,7 @@ function addon:ShowPhantomSendCard(lotId)
 
     if send then
         item.corpseSend = true
-        item.candidates = self:LootCouncilCandidates(name, sections)
+        item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
         item.onAward = function(who) self:SetPhantomSendTarget(lotId, who) end
         item.onReroll = function()
             self.phantomSends[lotId] = nil
@@ -2254,7 +2254,7 @@ function addon:ShowPhantomLoanCard(lotId)
             -- one click: the ML controls WHEN the role leaves their hands, not who gets it.
             local target = pending.target
             local cand
-            for _, c in ipairs(self:LootCouncilCandidates(name, sections)) do
+            for _, c in ipairs(self:LootCouncilCandidates(name, sections, lot.itemId)) do
                 if util:NormalizeKey(c.name) == util:NormalizeKey(target) then cand = c; break end
             end
             item.candidates = { cand or { name = target } }

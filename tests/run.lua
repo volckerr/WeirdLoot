@@ -337,6 +337,20 @@ test("LC candidates: rollers plus named-in-raid non-rollers", function()
           "named non-roller Zara present, no roll, tagged Named")
 end)
 
+test("LC candidates: an id-keyed rule lists its named raiders for that size only", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    w.addon:SaveNamedItemsText("46053, Zara > LC", true)
+    local function named(itemId)
+        for _, c in ipairs(w.addon:LootCouncilCandidates("Reply-Code Alpha", {}, itemId)) do
+            if string.lower(c.name) == "zara" then return true end
+        end
+        return false
+    end
+    check(named(46053), "25-man lists Zara from its id rule")
+    check(not named(46052), "10-man does not pick up the 25-man rule")
+end)
+
 -- Clicking a candidate awards the next copy through the normal win machinery: the copy gets a winner,
 -- payout owes it (non-ML), and a normal-mode WIN goes to the raid.
 test("LC award: awarding a candidate owes them and broadcasts a normal WIN", function()

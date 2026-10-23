@@ -71,11 +71,11 @@ SPEC_VOCAB = {
 }
 
 # Drops whose 10 and 25 versions share one name. Rules key on the item name, so one of the two would
-# always be discarded. Only the size listed here is emitted keyed by ITEM ID, which the addon prefers
-# over a name; the other keeps the plain name, and the two no longer collide. The sheet is untouched:
-# the ids live here, not in a cell.
+# always be discarded. Both sizes are emitted keyed by ITEM ID, which the addon prefers over a name.
+# Neither may keep the plain name: a size whose sheet row is empty would fall back to it and inherit
+# the other size's priority. The sheet is untouched: the ids live here, not in a cell.
 SIZE_ITEM_IDS = {
-    "reply-code alpha": {"10": 46052},   # Algalon's chest, Gift of the Observer; 25-man stays by name
+    "reply-code alpha": {"10": 46052, "25": 46053},   # Algalon's chest, Gift of the Observer
 }
 
 # Words the guild's own BiS tabs show under two different classes, so the sheet has to say which, the
@@ -145,14 +145,9 @@ def block_lines(rows, base, warn, size=None):
                 entries = names + specs
                 if entries:
                     tiers.append(" / ".join(entries))
-        ids = SIZE_ITEM_IDS.get(item.lower())
-        key = ids.get(size) if (ids and size) else None
-        if key and not tiers:
-            # With no id rule the lookup falls back to the other size's name rule. "rest" names nobody,
-            # so the drop rolls freely, but it still counts as listed and offers BiS.
-            # ponytail: key both sizes by id once LootCouncilCandidates passes the item id.
-            tiers = ["rest"]
         if tiers:
+            ids = SIZE_ITEM_IDS.get(item.lower())
+            key = ids.get(size) if (ids and size) else None
             head = str(key) if key else item
             out.append((head, f"{head}, {' > '.join(tiers)}"))
     return out

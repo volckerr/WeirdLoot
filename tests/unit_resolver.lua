@@ -653,6 +653,13 @@ test("item id rules: an id-keyed line beats the name, so 10 and 25 can differ", 
        "Zenkahi / Runereaver > LC", "with no id at all the name still answers")
 end)
 
+test("item id rules: a size with no line of its own does not inherit the other size's rule", function()
+    local w = makeWorld("Masterlooter", true)
+    w.addon:SaveNamedItemsText("46053, Alpha / Bravo > LC", true)
+    eq(w.addon:GetNamedRule("Reply-Code Alpha", 46052), nil, "10-man has no named rule")
+    eq(w.addon:ItemHasPriority("Reply-Code Alpha", 46052), false, "10-man is a plain roll, no BiS")
+end)
+
 test("item id rules: specs work by id too, and BiS is offered for an id-only listing", function()
     local w = makeWorld("Masterlooter", true)
     w.addon:SaveNamedItemsText("46052, shaman restoration > LC", true)
