@@ -223,6 +223,52 @@ function addon:EnsureSyncDropHook()
 end
 
 -- Routed from Core:HandleSlashCommand for "debug ..." subcommands.
+-- 3.3.5 Button:IsEnabled() returns 1 or 0, and 0 is truthy in Lua: compare, never test it bare.
+local function isEnabled(b)
+    local e = b:IsEnabled()
+    return e ~= nil and e ~= 0 and e ~= false
+end
+
+-- Test kit: log every live roll card as a "probe" record (lot, item, phantom, self-block reason, enabled
+-- brackets), so an out-of-game checker can compare what each client offered with the expected policy.
+-- Returns the number of cards probed.
+function addon:DebugProbeRolls()
+    local cards = self.DebugRollCards and self:DebugRollCards() or {}
+    for _, c in ipairs(cards) do
+        local roll = self.live and self.live.rolls and self.live.rolls[c.key]
+        local enabled = {}
+        for _, b in ipairs(c.buttons or {}) do
+            if isEnabled(b) then enabled[#enabled + 1] = b.bracket end
+        end
+        self:LogCoreEvent("probe", {
+            lot = c.key, item = roll and roll.itemId, phantom = (roll and roll.phantom) and true or false,
+            reason = roll and self:RollSelfBlockReason(roll.itemId, roll.phantom) or nil,
+            enabled = table.concat(enabled, ","),
+        })
+    end
+    return #cards
+end
+
+-- Test kit: press bracket `label` on the live roll card for itemId, through the real button, so a
+-- disabled bracket stays unclickable exactly as for a raider. Logs a "click" record either way.
+function addon:DebugClickRoll(itemId, label)
+    for _, c in ipairs(self.DebugRollCards and self:DebugRollCards() or {}) do
+        local roll = self.live and self.live.rolls and self.live.rolls[c.key]
+        if roll and roll.itemId == itemId then
+            for _, b in ipairs(c.buttons or {}) do
+                if b.bracket == label then
+                    local enabled = isEnabled(b)
+                    b:Click()
+                    self:LogCoreEvent("click", { lot = c.key, item = itemId, bracket = label, enabled = enabled })
+                    return true
+                end
+            end
+        end
+    end
+    self:LogCoreEvent("click", { item = itemId, bracket = label, missing = true })
+    return false
+end
+
 function addon:HandleDebugCommand(rest)
     local log = ensureLog()
     rest = string.trim(rest or "")
@@ -235,6 +281,7 @@ function addon:HandleDebugCommand(rest)
         self:Print("  mark <label>: insert a marker for easier log chasing.   dump [n]: show last n records (default 12).   clear: wipe it.")
         self:Print("  sync: force a session sync.   drop <n>: (test) drop the next N sync sends.")
         self:Print("  banner: preview the loot banners with sample data (uses the current Options look).")
+        self:Print("  probe: log every roll card's brackets.   click <itemId> <BiS|MS|MU|OS|TM|Pass>: press that card's button (test kit).")
     elseif verb == "banner" then
         if self.RunBannerDemo then
             self:RunBannerDemo()
@@ -286,6 +333,11 @@ function addon:HandleDebugCommand(rest)
     elseif verb == "sync" then
         self:RequestSessionSync()
         self:Print("Forced a session sync request.")
+    elseif verb == "probe" then
+        self:Print(string.format("Probed %d roll card(s).", self:DebugProbeRolls()))
+    elseif verb == "click" then
+        local item, bracket = string.match(arg or "", "^(%d+)%s+(%S+)$")
+        self:Print(self:DebugClickRoll(tonumber(item), bracket) and "Clicked." or "No such card or bracket.")
     elseif verb == "dump" then
         local r = log.records
         local n = math.min(#r, tonumber(arg) or 12)

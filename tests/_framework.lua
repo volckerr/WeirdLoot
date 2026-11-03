@@ -173,7 +173,10 @@ function self.makeWorld(playerName, isML, globals)
             elseif k == "Disable" then
                 return function(s) s.__disabled = true; return s end
             elseif k == "IsEnabled" then
-                return function(s) return not s.__disabled end
+                return function(s) if s.__disabled then return 0 end return 1 end   -- 3.3.5: 1/0, not a boolean
+            elseif k == "Click" then
+                -- as the client: a disabled button ignores Click, an enabled one runs its OnClick
+                return function(s) if not s.__disabled and s.__scripts.OnClick then s.__scripts.OnClick(s) end return s end
             elseif k == "CreateFontString" or k == "CreateTexture" then
                 -- children must be DISTINCT objects: a fontstring records its own __text (SetText
                 -- above); the chainable-self fallback would make every sibling share one __text,

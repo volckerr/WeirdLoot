@@ -341,6 +341,9 @@ function addon:RefreshLootAuthority()
     -- out-rank us). Only a false->true transition fires it, so the event/retry re-runs do not re-mint.
     if isLootMaster and not wasLootMaster then
         self:AssumeLootMasterSession()
+        -- a reload/relog (or a Keep on the fresh-session prompt) mid-roll: take back the rolls the
+        -- ledger still has ROLLING, with their recorded end
+        if self.RestoreOwnerRolls then self:RestoreOwnerRolls() end
         -- A blind ML needs the officer-note map (spec/status tokens) for resolution; ask the
         -- guild the moment authority lands, so a mid-raid ML swap doesn't wait for the next
         -- session start. No-op for note-readers and non-guildies (guards in RequestGuildNotes).

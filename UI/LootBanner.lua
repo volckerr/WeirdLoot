@@ -1106,6 +1106,11 @@ local function buildBanner(bannerName, medallionCfg)
         IconHitBox.UpdateTooltip = function(owner) BossBanner_OnLootItemEnter(owner) end
         IconHitBox:SetScript("OnEnter", BossBanner_OnLootItemEnter)
         IconHitBox:SetScript("OnLeave", BossBanner_OnLootItemLeave)
+        -- shift = link in chat, ctrl = dressing room, same as item buttons elsewhere
+        IconHitBox:SetScript("OnMouseUp", function(self)
+            local link = self:GetParent().itemLink
+            if link and link ~= "" then HandleModifiedItemClick(link) end
+        end)
 
         -- Animations
         Background.animForAnim = Background:CreateAnimationGroup()
@@ -2369,6 +2374,18 @@ function addon:CloseRollBannerCard(key)
         end
     end
     self:RefreshRollsLeftBanner()   -- a card ended (resolved/cancelled); the count may have changed
+end
+
+-- Test kit (/wl debug probe, /wl debug click): the live roll cards as { key = roll id, buttons = bracket
+-- buttons }, so a scripted client reads and presses the same buttons a raider would.
+function addon:DebugRollCards()
+    local out = {}
+    for _, f in ipairs(dropsBanner.LootFrames) do
+        if f.alive and not f.fading and f.rowKey and f.rollDuration then
+            out[#out + 1] = { key = f.rowKey, buttons = f.RollButtons }
+        end
+    end
+    return out
 end
 
 -- Re-render a card's item visuals in place once a cold item cache resolves (the live feed's name

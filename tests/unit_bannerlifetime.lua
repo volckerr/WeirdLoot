@@ -418,4 +418,35 @@ test("drops banner (roll cards) sits a clear band above the awarded banner (win 
         "drops banner level (" .. drops .. ") outranks awarded (" .. awarded .. ") by a full band")
 end)
 
+test("test kit: probe logs a roll card's enabled brackets; click presses only an enabled one", function()
+    local w = bannerWorld(false)
+    local dbg = assert(loadfile("Core/Debug.lua"))   -- the core harness stubs LogCoreEvent; this test needs the real log
+    setfenv(dbg, w.env); dbg()
+    w.env.WeirdLootDebugLog = { enabled = true, records = {} }
+    local picks = {}
+    w.addon.live = w.addon.live or {}
+    w.addon.live.rolls = w.addon.live.rolls or {}
+    w.addon.live.rolls["L:95"] = { id = "L:95", itemId = 40005 }
+    w.addon:AddRollBannerItem({
+        key = "L:95", link = WON.link, icon = "x", quantity = 1, rollDuration = 30,
+        disabled = { BiS = true, MS = "You already have this unique item.", MU = true, OS = true, TM = true },
+        onPick = function(label) picks[#picks + 1] = label end,
+    })
+    for _ = 1, 60 do F.pump(w, 0.001); if #w.addon:DebugRollCards() > 0 then break end end
+    eq(w.addon:DebugProbeRolls(), 1, "one live roll card probed")
+    local recs = w.env.WeirdLootDebugLog.records
+    local probe = recs[#recs]
+    eq(probe.ev, "probe", "a probe record was logged")
+    eq(probe.lot, "L:95", "for the card's lot")
+    eq(probe.item, 40005, "with the roll's item")
+    eq(probe.enabled, "Pass", "only Pass is enabled")
+    check(w.addon:DebugClickRoll(40005, "MS"), "the MS button exists")
+    eq(#picks, 0, "a disabled bracket ignores the click")
+    eq(recs[#recs].enabled, false, "the click record says it was disabled")
+    check(w.addon:DebugClickRoll(40005, "Pass"), "the Pass button exists")
+    eq(picks[1], "Pass", "an enabled bracket sends the pick")
+    check(not w.addon:DebugClickRoll(40006, "Pass"), "no card for another item")
+    eq(recs[#recs].missing, true, "a miss is logged")
+end)
+
 F.endSuite()
