@@ -548,6 +548,7 @@ function addon:StartLootSession()
 
     -- Wipe the ledger and baseline the loot already in bags as idle (not fresh drops), so a
     -- session started mid-bag does not auto-roll everything the ML is already carrying.
+    self:DropPhantomPickups()
     self.lootCore:Reset()
     local eligible = self:ItemIdCounts(self:BuildTradeableEpicCounts())
     self.session.prevEligible = eligible
@@ -584,6 +585,7 @@ function addon:ClearSession()
     self.session.prevEligible = {}
     self.session.lcOverrides = {}        -- temporary LC priorities die with the session
     self.lootView = { items = {}, results = {} }
+    self:DropPhantomPickups()
     self.lootCore:Reset()
     self:TriggerCallback("SESSION_UPDATED")
 end

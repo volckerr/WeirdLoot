@@ -362,6 +362,7 @@ function addon:PLAYER_LOGIN()
     self.events:RegisterEvent("LOOT_SLOT_CLEARED")
     self.events:RegisterEvent("LOOT_CLOSED")
     self.events:RegisterEvent("LOOT_BIND_CONFIRM")
+    self.events:RegisterEvent("PLAYER_TARGET_CHANGED")
     self.events:RegisterEvent("GUILD_ROSTER_UPDATE")
     self:RequestGuildRoster()
 

@@ -147,6 +147,45 @@ test("live roll: single copy, two rollers -> one owed winner + payout", function
     eq(owedCount(w), 1, "payout owes exactly one item")
 end)
 
+test("ML reload mid-roll: the owner roll comes back with its picks and the true time left", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 40005, 1); bagUpdate(w)
+    local lot = openLot(w, 40005)
+    w.addon:StartLiveRoll(lot.id)
+    w.addon:RegisterInterest(lot.id, "Alice", "ms")
+    local full = w.addon.live.rolls[lot.id].duration
+    check(w.addon.session.rollEnds and w.addon.session.rollEnds[lot.id], "the roll end is recorded in the session")
+    F.advanceClock(10)
+    w.addon.live.rolls = {}                                   -- a /reload: live records are gone
+    eq(w.addon:RollRemaining(w.addon.lootCore:Get(lot.id)), "", "before the restore the ML has no time to send")
+    w.addon:SyncRollPopups()
+    local r = w.addon.live.rolls[lot.id]
+    check(r and r.owner, "the ML has an owner roll again")
+    eq(math.floor(r.deadline - w.env.GetTime() + 0.5), full - 10, "with the time left, not a fresh timer")
+    check(r.registrants["alice"], "and Alice's pick")
+    check(w.addon:RollRemaining(w.addon.lootCore:Get(lot.id)) ~= "", "its snapshots carry the time left again")
+    w.addon:SyncRollPopups()
+    eq(w.addon.live.rolls[lot.id], r, "a second sync does not rebuild it")
+end)
+
+test("ML reload mid-roll: a roll whose end passed during the reload resolves at once", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 40005, 1); bagUpdate(w)
+    local lot = openLot(w, 40005)
+    w.addon:StartLiveRoll(lot.id)
+    w.addon:RegisterInterest(lot.id, "Alice", "ms")
+    F.advanceClock(w.addon.live.rolls[lot.id].duration + 60)
+    w.addon.live.rolls = {}
+    w.addon:SyncRollPopups()
+    F.pump(w, 0.1)
+    eq(w.addon.lootCore:State(lot.id), "resolved", "the expired roll resolved")
+    eq(w.addon.lootCore:Get(lot.id).awards[1].winner, "Alice", "with the pick made before the reload")
+    w.addon:SyncRollPopups()
+    eq(w.addon.session.rollEnds[lot.id], nil, "and its recorded end is pruned")
+end)
+
 test("top-N: 2x drop, 3 rollers -> 2 distinct owed winners", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
@@ -335,6 +374,20 @@ test("LC candidates: rollers plus named-in-raid non-rollers", function()
     check(byName["alice"] and byName["alice"].roll == 41, "roller Alice present with her roll")
     check(byName["zara"] and byName["zara"].roll == nil and byName["zara"].bracket == "Named",
           "named non-roller Zara present, no roll, tagged Named")
+end)
+
+test("LC candidates: an id-keyed rule lists its named raiders for that size only", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    w.addon:SaveNamedItemsText("46053, Zara > LC", true)
+    local function named(itemId)
+        for _, c in ipairs(w.addon:LootCouncilCandidates("Reply-Code Alpha", {}, itemId)) do
+            if string.lower(c.name) == "zara" then return true end
+        end
+        return false
+    end
+    check(named(46053), "25-man lists Zara from its id rule")
+    check(not named(46052), "10-man does not pick up the 25-man rule")
 end)
 
 -- Clicking a candidate awards the next copy through the normal win machinery: the copy gets a winner,
@@ -1597,10 +1650,10 @@ test("ineligible class: roll brackets are DISABLED (not just message-guarded)", 
     local roll = raider.addon.live.rolls[lot.id]
     local f = roll and roll.popup
     check(f, "raider built an interest popup")
-    check(not f.bisBtn:IsEnabled(), "BiS button disabled for an item the class cannot use")
-    check(not f.msBtn:IsEnabled(),  "MS button disabled")
-    check(not f.tmBtn:IsEnabled(),  "TM button disabled")
-    check(f.passBtn:IsEnabled(),    "Pass remains enabled (anyone may pass)")
+    check(f.bisBtn:IsEnabled() == 0, "BiS button disabled for an item the class cannot use")
+    check(f.msBtn:IsEnabled() == 0,  "MS button disabled")
+    check(f.tmBtn:IsEnabled() == 0,  "TM button disabled")
+    check(f.passBtn:IsEnabled() == 1, "Pass remains enabled (anyone may pass)")
 end)
 
 test("eligible class: roll brackets stay enabled", function()
@@ -1615,7 +1668,7 @@ test("eligible class: roll brackets stay enabled", function()
     ml.addon:StartLiveRoll(lot.id)
     flushWireTo(raider)
     local f = raider.addon.live.rolls[lot.id].popup
-    check(f.bisBtn:IsEnabled() and f.msBtn:IsEnabled(), "brackets enabled for an item the class can use")
+    check(f.bisBtn:IsEnabled() == 1 and f.msBtn:IsEnabled() == 1, "brackets enabled for an item the class can use")
 end)
 
 test("ML authority: popup BiS follows the synced prio, not the raider's local list", function()
@@ -1631,8 +1684,8 @@ test("ML authority: popup BiS follows the synced prio, not the raider's local li
     ml.addon:StartLiveRoll(lot.id)
     flushWireTo(raider)
     local f = raider.addon.live.rolls[lot.id].popup
-    check(not f.bisBtn:IsEnabled(), "BiS disabled: the ML's no-prio broadcast wins over the raider's local list")
-    check(f.msBtn:IsEnabled(), "MS stays available")
+    check(f.bisBtn:IsEnabled() == 0, "BiS disabled: the ML's no-prio broadcast wins over the raider's local list")
+    check(f.msBtn:IsEnabled() == 1, "MS stays available")
 end)
 
 test("prio on the lot: the ML stamps its rendered prio at mint and the snapshot carries it", function()
@@ -2537,15 +2590,19 @@ test("roll block: OwnsBlockingUnique needs the item to be pure-Unique AND held",
     check(not w.addon:OwnsBlockingUnique(40001), "pure-unique not held is not blocked")
 end)
 
-test("roll block: the ML is exempt from the own-unique block (holds the drop only to hand it out)", function()
+test("roll block: the ML's undistributed unique does not self-block, a self-won one does", function()
     local w = makeWorld("Masterlooter", true)
     w.addon.IsItemPureUnique = function(_, id) return id == 40005 end
-    putBag(w, 0, 1, 40005, 1)                     -- the unique drop sits in the ML's bags during rolls
-    w.addon.IsAuthorizedLootMaster = function() return true end
-    check(not w.addon:OwnsBlockingUnique(40005), "ML holding the dropped unique is not self-blocked")
-    -- a non-ML holding the same unique is still blocked: the copy is genuinely theirs
-    w.addon.IsAuthorizedLootMaster = function() return false end
-    check(w.addon:OwnsBlockingUnique(40005), "a non-ML holder is still blocked")
+    startSession(w)
+    setBag(w, 40005, 1); bagUpdate(w)              -- the unique drop sits in the ML's bags during rolls
+    putBag(w, 0, 1, 40005, 1)
+    local lot = openLot(w, 40005)
+    check(not w.addon:OwnsBlockingUnique(40005), "ML holding the open lot's copy is not self-blocked")
+    check(w.addon:OwnsBlockingUnique(40005, true), "a phantom lot of the same item is blocked")
+    w.addon:StartLiveRoll(lot.id)
+    w.addon:RegisterInterest(lot.id, "Masterlooter", "ms")
+    w.addon:ResolveLiveRoll(lot.id)
+    check(w.addon:OwnsBlockingUnique(40005), "self-won: the copy is the ML's own")
 end)
 
 test("roll block: PlayerHoldsItem also scans the keyring (quest-reward keys live there)", function()
@@ -2624,6 +2681,40 @@ test("roll block: holding the Archivum Data Disc itself blocks a second one (no 
     w.env.__bank[45857] = nil
     w.env.__bank[45798] = 1                         -- chain finished: Heroic Celestial Planetarium Key
     eq(w.addon:RollSelfBlockReason(45857), "quest", "the reward still blocks once the disc is gone")
+end)
+
+test("roll block: the ML's undistributed quest-starter does not block, a self-won one does", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 46052, 1); bagUpdate(w)               -- the ML auto-looted this kill's Reply-Code Alpha
+    putBag(w, 0, 1, 46052, 1)                       -- ...and it physically sits in the ML's bags
+    local lot = openLot(w, 46052)
+    eq(w.addon:RollSelfBlockReason(46052), nil, "open lot: the ML holds it only to hand out")
+    eq(w.addon:RollSelfBlockReason(46052, true), "quest", "phantom lot: every held copy counts")
+    w.env.__equipped[15] = 46321                    -- an ML who already did the quest is still blocked
+    eq(w.addon:RollSelfBlockReason(46052), "quest", "a held reward blocks regardless of the ledger")
+    w.env.__equipped[15] = nil
+    w.addon:StartLiveRoll(lot.id)
+    w.addon:RegisterInterest(lot.id, "Masterlooter", "ms")
+    w.addon:ResolveLiveRoll(lot.id)                 -- the sheet rule is "hunter > LC": resolves unawarded
+    eq(w.addon:RollSelfBlockReason(46052), nil, "awaiting the council's pick: still the raid's copy")
+    w.addon.lootCore:AwardCopy(lot.id, "Masterlooter")
+    eq(w.addon:RollSelfBlockReason(46052), "quest", "awarded to the ML: the copy is now theirs")
+end)
+
+test("roll block: a copy the ML owes a raider does not block the ML; the raider's won copy blocks them", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 46052, 1); bagUpdate(w)
+    putBag(w, 0, 1, 46052, 1)
+    local lot = openLot(w, 46052)
+    w.addon:StartLiveRoll(lot.id)
+    w.addon:RegisterInterest(lot.id, "Sayri", "ms")
+    w.addon:ResolveLiveRoll(lot.id)
+    eq(w.addon:RollSelfBlockReason(46052), nil, "owed to Sayri: still not the ML's copy")
+    local r = makeWorld("Sayri", false)
+    putBag(r, 0, 1, 46052, 1)                       -- a raider holding a copy: it is theirs
+    eq(r.addon:RollSelfBlockReason(46052), "quest", "the raider's own copy blocks a second")
 end)
 
 -- ===========================================================================

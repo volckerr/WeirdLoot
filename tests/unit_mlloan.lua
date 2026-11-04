@@ -84,6 +84,52 @@ H.test("invisible phantom resolve: pending loan, no corpse send, ONE loan candid
     H.eq(captured.candidates[1].name, "Gorgarg", "and it is the winner")
 end)
 
+H.test("forgive: a lost invisible copy is written off; its loan ends; the card offers no retry", function()
+    local w, lot = ownerWithInvisiblePhantom("Gorgarg")
+    local captured
+    local orig = w.addon.AddLootBannerItem
+    w.addon.AddLootBannerItem = function(self, item) captured = item; return orig(self, item) end
+    w.addon:ShowPhantomLoanCard(lot.id)
+    H.check(captured.onForgive ~= nil, "the loan offer card carries the forgive row")
+    w.addon:StartMLLoan(lot.id, "Gorgarg")
+    w.addon:ShowPhantomLoanCard(lot.id)
+    H.check(captured.onForgive == nil, "not while the loan runs (it would cut off a pickup)")
+    local removed = {}
+    w.addon.lootCore:On("awardRemoved", function(itemId, winner) removed[#removed + 1] = winner end)
+    H.check(w.addon:ForgivePhantomAward(lot.id), "forgiven")
+    w.addon.AddLootBannerItem = orig
+    local core = w.addon.lootCore
+    H.eq(core:Get(lot.id).awards[1].state, core.AWARD.REMOVED, "the award is written off")
+    H.eq(removed[1], "Gorgarg", "consumers hear awardRemoved for the winner")
+    H.eq(w.addon:ActiveMLLoan(), nil, "the loan ended")
+    H.eq(w.addon.phantomLoans[lot.id], nil, "nothing left pending")
+    H.check(captured.onForgive == nil and not captured.loanSend, "the card is a plain win card now")
+    H.check(not w.addon:ForgivePhantomAward(lot.id), "a second forgive does nothing")
+end)
+
+H.test("forgive: only the ML, only phantom lots", function()
+    local w, lot = ownerWithInvisiblePhantom("Gorgarg")
+    local real = w.addon.lootCore:mint(40005, 1, true)
+    H.check(not w.addon:ForgivePhantomAward(real.id), "a copy in the ML's bags can always be traded: never forgiven")
+    w.addon.IsAuthorizedLootMaster = function() return false end
+    H.check(not w.addon:ForgivePhantomAward(lot.id), "a raider cannot forgive")
+    H.eq(w.addon.lootCore:Get(lot.id).awards[1].state, w.addon.lootCore.AWARD.OWED, "still owed")
+end)
+
+H.test("an ML reload rebuilds the pending pickup, so the retry and forgive come back", function()
+    local w, lot = ownerWithInvisiblePhantom("Gorgarg")
+    local send = w.addon.lootCore:MintPhantom(40005, 1)
+    w.addon:StartLiveRoll(send.id); w.addon:RegisterInterest(send.id, "Saelinen", "ms"); w.addon:ResolveLiveRoll(send.id)
+    w.addon.phantomLoans, w.addon.phantomSends = nil, nil                -- a /reload: memory-only registries gone
+    w.addon:RestorePhantomPickups()
+    H.eq(w.addon.phantomLoans[lot.id].target, "Gorgarg", "the loan offer is back for the invisible copy")
+    H.eq(w.addon.phantomSends[send.id].target, "Saelinen", "the corpse send is back for the visible one")
+    w.addon:ForgivePhantomAward(send.id)
+    w.addon.phantomSends = nil
+    w.addon:RestorePhantomPickups()
+    H.eq(w.addon.phantomSends and w.addon.phantomSends[send.id], nil, "a forgiven award is not rebuilt")
+end)
+
 H.test("StartMLLoan stamps the session; owner keeps authority when the WoW roster flips", function()
     local w, lot = ownerWithInvisiblePhantom("Gorgarg")
     w.addon:StartMLLoan(lot.id, "Gorgarg")
@@ -543,6 +589,51 @@ H.test("loan encode/decode round-trips (including no-loan and older-client absen
     H.eq(w.addon:EncodeMLLoan(nil), "", "no loan encodes empty")
     H.eq(w.addon:DecodeMLLoan(""), nil, "empty decodes to no loan")
     H.eq(w.addon:DecodeMLLoan(nil), nil, "missing field (older ML) decodes to no loan")
+end)
+
+H.test("send card: Item lost only once the ML has no dead creature targeted; on-screen cards follow the target", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local send = w.addon.lootCore:MintPhantom(40005, 1)
+    local cards = {}
+    w.addon.AddLootBannerItem = function(self, item) cards[#cards + 1] = item end
+    local shown = true
+    w.addon.AwardCardShown = function() return shown end
+    local target                                       -- nil, "mob" (dead creature) or "body" (dead player)
+    w.env.UnitExists = function(u) return u == "target" and target ~= nil end
+    w.env.UnitIsDead = function(u) return u == "target" and target ~= nil end
+    w.env.UnitIsPlayer = function(u) return u == "target" and target == "body" end
+    w.addon.phantomSends = { [999] = { itemId = 40005, target = "Gorgarg" } }
+    target = nil; w.addon:PLAYER_TARGET_CHANGED()     -- an earlier send saw the target clear
+    w.addon.phantomSends = {}                         -- and was delivered
+    target = "mob"; w.addon:PLAYER_TARGET_CHANGED()   -- the next corpse is targeted while nothing is pending
+    w.addon:StartLiveRoll(send.id); w.addon:RegisterInterest(send.id, "Saelinen", "ms"); w.addon:ResolveLiveRoll(send.id)
+    H.check(w.addon.phantomSends[send.id] ~= nil, "a send is pending")
+    H.eq(cards[#cards].onForgive, nil, "dead mob targeted: still looting, no Item lost")
+    target = nil; w.addon:PLAYER_TARGET_CHANGED()
+    H.check(cards[#cards].onForgive ~= nil, "target cleared: the card redraws with Item lost")
+    local n = #cards
+    target = "body"; w.addon:PLAYER_TARGET_CHANGED()
+    H.eq(#cards, n, "a dead player is not a corpse being looted: no redraw")
+    target = "mob"; w.addon:PLAYER_TARGET_CHANGED()
+    H.eq(cards[#cards].onForgive, nil, "back on a corpse: Item lost hides again")
+    shown = false; n = #cards
+    target = nil; w.addon:PLAYER_TARGET_CHANGED()
+    H.eq(#cards, n, "a dismissed card is not brought back")
+end)
+
+H.test("a fresh session drops the old session's pending pickups and closes their cards", function()
+    local w, lot = ownerWithInvisiblePhantom("Gorgarg")
+    local send = w.addon.lootCore:MintPhantom(40005, 1)
+    w.addon:StartLiveRoll(send.id); w.addon:RegisterInterest(send.id, "Saelinen", "ms"); w.addon:ResolveLiveRoll(send.id)
+    H.check(w.addon.phantomSends[send.id] and w.addon.phantomLoans[lot.id], "a send and a loan are pending")
+    local closed = {}
+    w.addon.CloseAwardCard = function(self, key) closed[key] = true end
+    w.addon:StartLootSession()
+    H.eq(w.addon.phantomSends, nil, "no send survives into the new session")
+    H.eq(w.addon.phantomLoans, nil, "no loan offer either")
+    H.check(closed[send.id] and closed[lot.id], "both win cards are closed")
+    H.eq(w.addon:PhantomSendForItem(40005), nil, "the next corpse with that item is not sent to the old winner")
 end)
 
 F.endSuite()

@@ -253,7 +253,7 @@ end
 -- popups whose lot has left ROLLING (resolved/cancelled/gone). The ML drives its own roll popups
 -- via StartLiveRoll, so this is raider-only.
 function addon:SyncRollPopups()
-    if self:IsAuthorizedLootMaster() then return end
+    if self:IsAuthorizedLootMaster() then return self:RestoreOwnerRolls() end
     local core = self.lootCore
     -- RESTORE ONLY. A raider's roll popup is opened by the DROP message and closed by the CANCEL or WIN
     -- message -- it is message-driven, never polled from ledger state. The ledger mirror legitimately
@@ -301,6 +301,64 @@ function addon:RestoreRollPopup(lot)
     end
     self.live.rolls[lot.id] = roll
     self:ShowInterestPopup(roll)
+end
+
+-- The ML's roll ends, as wall-clock time() in the session SavedVariable. A roll's GetTime() deadline
+-- and its live record live only in memory, so after a /reload or relog the ML had a ROLLING lot with no
+-- card, no End/Cancel and no deadline (the roll never ended), and its snapshots sent raiders no time
+-- left. Pruned when a restore finds the lot no longer rolling.
+local function sessionRollEnds(self)
+    local s = self.session
+    if not s then return nil end
+    s.rollEnds = s.rollEnds or {}
+    return s.rollEnds
+end
+
+function addon:RecordRollEnd(lotId, seconds)
+    local ends = sessionRollEnds(self)
+    if ends then ends[lotId] = time() + seconds end
+end
+
+-- ML-side restore: rebuild the owner roll (record, card, End/Cancel, auto-end) for every lot the
+-- ledger says is ROLLING that has no live record, with the time left from the recorded end. A roll
+-- whose end passed while the ML was away resolves at once with the picks already collected (the popup
+-- fallback's OnUpdate fires on its past deadline). No DROP re-broadcast: raiders keep or restore their
+-- own records, and the ML's snapshots now carry the true remaining time again (RollRemaining).
+function addon:RestoreOwnerRolls()
+    if not self:IsAuthorizedLootMaster() then return end
+    local core = self.lootCore
+    if not core then return end
+    local ends = sessionRollEnds(self) or {}
+    local now = time()
+    for _, lot in ipairs(core:List()) do
+        if lot.state == core.STATE.ROLLING and lot.id ~= self._startingRoll
+            and not (self.live.rolls and self.live.rolls[lot.id]) then
+            local name, link, icon = util:ItemRender(lot.itemId)
+            local duration = getRollDuration()
+            local remaining = ends[lot.id] and (ends[lot.id] - now) or duration
+            if remaining < 0 then remaining = 0 end
+            if remaining > duration then duration = remaining end
+            local roll = {
+                id = lot.id, itemId = lot.itemId, link = link,
+                name = name or link or ("item:" .. tostring(lot.itemId)),
+                icon = icon, prio = lot.prio or (name and self:GetLiveItemPrio({ name = name, itemId = lot.itemId })) or "",
+                owner = true, registrants = {}, resolved = false,
+                quantity = core:LiveCount(lot.id), phantom = lot.phantom or nil, invisible = lot.invisibleToML or nil,
+                duration = duration, deadline = GetTime() + remaining,
+            }
+            for playerKey, tier in pairs(lot.responses or {}) do
+                roll.registrants[util:NormalizeKey(playerKey)] = { name = playerKey, tier = tier }
+            end
+            if not ends[lot.id] then ends[lot.id] = now + remaining end
+            self.live.rolls[lot.id] = roll
+            self:LogCoreEvent("roll-restore", { id = lot.id, item = lot.itemId, remaining = math.floor(remaining) })
+            self:ShowInterestPopup(roll)
+        end
+    end
+    for id in pairs(ends) do
+        local l = core:Get(id)
+        if not l or l.state ~= core.STATE.ROLLING then ends[id] = nil end
+    end
 end
 
 function addon:HasOpenPendingForLot(lotId)
@@ -889,6 +947,10 @@ local function makePopup()
         GameTooltip:Show()
     end)
     f.iconHover:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    -- shift = link in chat, ctrl = dressing room, same as item buttons elsewhere
+    f.iconHover:SetScript("OnMouseUp", function()
+        if f.itemLink and f.itemLink ~= "" then HandleModifiedItemClick(f.itemLink) end
+    end)
 
     f.name = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     f.name:SetPoint("TOPLEFT", f.icon, "TOPRIGHT", 6, -1)
@@ -1139,18 +1201,22 @@ function addon:PlayerHoldsItem(itemId)
     return (GetItemCount(itemId, true) or 0) > 0
 end
 
--- Self-protection: you already hold a pure-Unique copy of itemId, so you can never receive another and
--- should not roll on it. Hold-check first (cheap, usually false -> skips the tooltip scan). Enforced
--- only on the rolling player's own client, like the class-token block: the ML can't see others' bags.
--- The ML is exempt: they always transiently hold the dropped copy during rolls (it sits in their bags
--- until handed out), so the hold-check would trip on the very item being rolled -- a false positive.
--- Other players only ever hold a copy that is genuinely theirs.
--- EXCEPT on a phantom lot (forPhantom): its copy never enters the ML's bags -- the lot exists
--- precisely because the ML already holds a blocking copy -- so the ML's held copy is a genuine
--- block, not the transient drop, and the exemption must not apply.
+-- Do you hold a copy of itemId that is genuinely yours? Copies you hold only to hand out (the ML's
+-- undistributed drops, per the ledger) do not count; a copy you won does. On a phantom lot every
+-- held copy counts: its copy is on the corpse, and any copy you hold keeps that one out of your bags.
+function addon:OwnsCopyOf(itemId, forPhantom)
+    if not itemId then return false end
+    self:PrimeItemInfo(itemId)
+    local held = GetItemCount(itemId, true) or 0
+    if held == 0 then return false end
+    if forPhantom or not self.lootCore then return true end
+    return held > self.lootCore:HeldForRaid(itemId, util:GetPlayerName("player"))
+end
+
+-- Self-protection: you own a pure-Unique copy of itemId, so you can never receive another and should
+-- not roll on it. Enforced only on the rolling player's own client: the ML can't see others' bags.
 function addon:OwnsBlockingUnique(itemId, forPhantom)
-    if not forPhantom and self:IsAuthorizedLootMaster() then return false end
-    return self:PlayerHoldsItem(itemId) and self:IsItemPureUnique(itemId)
+    return self:OwnsCopyOf(itemId, forPhantom) and self:IsItemPureUnique(itemId)
 end
 
 -- Some drops start a one-time quest and are consumed doing so, so a held/unique check on the drop
@@ -1179,10 +1245,11 @@ addon.ROLL_REWARD_GATE = {
 -- finished the quest; or you still hold the DROP itself (a quest starter the server keeps until the
 -- turn-in, and one that carries no Unique limit, like the Archivum Data Disc), so a second copy is
 -- useless to you and, once the quest is started, unlootable. Either way: don't roll on it.
-function addon:OwnsQuestReward(itemId)
+-- A drop copy the ML holds only to hand out is not yours (OwnsCopyOf); a held reward always is.
+function addon:OwnsQuestReward(itemId, forPhantom)
     local reward = self.ROLL_REWARD_GATE[itemId]
     if reward == nil then return false end
-    if self:PlayerHoldsItem(itemId) then return true end
+    if self:OwnsCopyOf(itemId, forPhantom) then return true end
     if type(reward) == "table" then
         for _, id in ipairs(reward) do
             if self:PlayerHoldsItem(id) then return true end
@@ -1195,10 +1262,10 @@ end
 -- Combined self-block reason for rolling on itemId, or nil if you may roll. "quest" (you already did
 -- the quest this drop starts) takes priority over "unique" (you already hold this pure-Unique item),
 -- then "mount" (you already learned this mount; item long consumed, so only the tooltip knows).
--- forPhantom: the roll is a phantom lot (copy on the corpse), which drops the ML's unique exemption.
+-- forPhantom: the roll is a phantom lot (copy on the corpse), so every held copy counts as yours.
 function addon:RollSelfBlockReason(itemId, forPhantom)
     if not itemId then return nil end
-    if self:OwnsQuestReward(itemId) then return "quest" end
+    if self:OwnsQuestReward(itemId, forPhantom) then return "quest" end
     if self:OwnsBlockingUnique(itemId, forPhantom) then return "unique" end
     if self:KnowsMountItem(itemId) then return "mount" end
     -- Class equip-eligibility. IsItemUsableForPlayer matches GetItemInfo's localized subtype against
@@ -1773,7 +1840,12 @@ function addon:StartLiveRoll(lotId)
 
     -- move the lot to rolling (surface first if it is still idle/new/skipped)
     if lot.state ~= core.STATE.PENDING then core:Surface(lotId) end
-    if not core:StartRoll(lotId) then return end
+    -- StartRoll's ledgerChanged runs SyncRollPopups -> RestoreOwnerRolls while this roll's record does
+    -- not exist yet; without the guard the restore builds a second owner roll for the same lot.
+    self._startingRoll = lotId
+    local started = core:StartRoll(lotId)
+    self._startingRoll = nil
+    if not started then return end
 
     local prio = lot.prio or self:GetLiveItemPrio({ name = name, itemId = lot.itemId })   -- the stamped prio raiders already hold
     local quantity = core:LiveCount(lotId)
@@ -1785,6 +1857,7 @@ function addon:StartLiveRoll(lotId)
         deadline = GetTime() + rollDuration,   -- authoritative end; sync carries the remaining
     }
     self.live.rolls[lotId] = roll
+    self:RecordRollEnd(lotId, rollDuration)
 
     -- the wire carries the itemId (not a link): every client renders its own localized name.
     -- field 4 is the REMAINING seconds (full duration at start); a client sets deadline = now + it.
@@ -2047,7 +2120,7 @@ end
 -- The award-candidate list for an LC card (ML only): every roller (bracket + roll), in bracket-priority
 -- order, PLUS any named-rule candidate who is in the raid but did not roll (no roll, tagged "Named").
 -- Clicking a row awards the next copy to that person (AwardLootCouncilCopy).
-function addon:LootCouncilCandidates(itemName, sections)
+function addon:LootCouncilCandidates(itemName, sections, itemId)
     local list, seen = {}, {}
     for _, s in ipairs(sections or {}) do
         for _, m in ipairs(s.members) do
@@ -2064,7 +2137,7 @@ function addon:LootCouncilCandidates(itemName, sections)
             end
         end
     end
-    local rule = self:GetNamedRule(itemName)
+    local rule = self:GetNamedRule(itemName, itemId)
     if rule and rule.tiers then
         for _, tier in ipairs(rule.tiers) do
             for _, entry in ipairs(tier.entries or {}) do
@@ -2129,7 +2202,7 @@ function addon:ShowLootCouncilCard(lotId)
     end
 
     local item = applyPhantomTag(self:BannerLootCouncilItem({ id = lotId, link = link, icon = icon, quantity = total }, sections))
-    item.candidates = self:LootCouncilCandidates(name, sections)
+    item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
     item.copiesTotal = total
     item.copiesRemaining = remaining
     item.awarded = awarded
@@ -2210,8 +2283,12 @@ function addon:ShowPhantomSendCard(lotId)
 
     if send then
         item.corpseSend = true
-        item.candidates = self:LootCouncilCandidates(name, sections)
+        item.currentTarget = send.target
+        item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
         item.onAward = function(who) self:SetPhantomSendTarget(lotId, who) end
+        if not self:HasDeadCreatureTarget() then
+            item.onForgive = function() self:ConfirmForgivePhantom(lotId) end
+        end
         item.onReroll = function()
             self.phantomSends[lotId] = nil
             if self:UnlockSessionRoll(lotId) then self:StartLiveRoll(lotId) end
@@ -2254,11 +2331,13 @@ function addon:ShowPhantomLoanCard(lotId)
             -- one click: the ML controls WHEN the role leaves their hands, not who gets it.
             local target = pending.target
             local cand
-            for _, c in ipairs(self:LootCouncilCandidates(name, sections)) do
+            for _, c in ipairs(self:LootCouncilCandidates(name, sections, lot.itemId)) do
                 if util:NormalizeKey(c.name) == util:NormalizeKey(target) then cand = c; break end
             end
             item.candidates = { cand or { name = target } }
             item.onAward = function(who) self:StartMLLoan(lotId, who) end
+            -- not while a loan runs: that would cut off a pickup in progress
+            item.onForgive = function() self:ConfirmForgivePhantom(lotId) end
         end
         item.onReroll = function()
             local active = self:ActiveMLLoan()
@@ -2268,6 +2347,18 @@ function addon:ShowPhantomLoanCard(lotId)
         end
     end
     self:AddLootBannerItem(item)
+end
+
+function addon:ConfirmForgivePhantom(lotId)
+    local lot = self.lootCore and self.lootCore:Get(lotId)
+    if not lot then return end
+    local winner
+    for _, a in ipairs(lot.awards or {}) do
+        if a.state == self.lootCore.AWARD.OWED then winner = a.winner; break end
+    end
+    local _, link = util:ItemRender(lot.itemId)
+    StaticPopup_Show("WEIRDLOOT_FORGIVE_PHANTOM", link or "the item", winner or "the winner",
+        { lotId = lotId, itemLink = link })
 end
 
 -- pack sections for WIN: "label~name=roll,name=roll" joined by ";"

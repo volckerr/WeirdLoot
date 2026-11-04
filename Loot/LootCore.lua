@@ -602,6 +602,19 @@ function LootCore:MarkDelivered(id, awardIndex, recipient, when)
     return true
 end
 
+-- Write off one OWED award whose copy no longer exists (a phantom copy that left with its corpse or
+-- chest). Terminal REMOVED, as for a copy that left the bags; consumers hear awardRemoved.
+function LootCore:ForgiveAward(id, awardIndex)
+    local lot = self.lots[id]; if not lot or not lot.awards then return false end
+    local a = lot.awards[awardIndex]
+    if not a or a.state ~= AWARD.OWED then return false end
+    a.state = AWARD.REMOVED
+    self:log("forgive", { id = id, itemId = lot.itemId, winner = a.winner, awardIndex = awardIndex })
+    self:emit("awardRemoved", lot.itemId, a.winner, id)
+    self:emit("ledgerChanged")
+    return true
+end
+
 -- The path TradeDeliver uses: a trade to `player` for `itemId` completed. Marks the oldest
 -- matching owed award delivered (FIFO over that player's owed copies of the item). Phantom
 -- awards are skipped: their copies are never in the ML's bags, so no trade can deliver them
@@ -624,6 +637,33 @@ end
 -- ---------------------------------------------------------------------------
 -- queries
 -- ---------------------------------------------------------------------------
+-- Copies of itemId in playerKey's bags only to be handed out: an unresolved bag-backed lot (the ML
+-- holds it), an award owed to someone else, or one left without a winner. A self-win is the
+-- holder's own copy. Phantom copies sit on a corpse, so they are never in anyone's bags.
+function LootCore:HeldForRaid(itemId, playerKey)
+    local key = normName(playerKey)
+    if not key then return 0 end
+    local n = 0
+    local lots = self:lotsForItem(itemId)
+    for i = 1, #lots do
+        local lot = lots[i]
+        if not lot.phantom and not lot.removed then
+            if lot.awards then
+                for idx = 1, #lot.awards do
+                    local a = lot.awards[idx]
+                    if (a.holder or self._mlKey) == key
+                        and (a.state == AWARD.OWED or (a.state == AWARD.RESOLVED and not a.winner)) then
+                        n = n + 1
+                    end
+                end
+            elseif self._mlKey == key then
+                n = n + (lot.count or 0)
+            end
+        end
+    end
+    return n
+end
+
 function LootCore:Get(id) return self.lots[id] end
 function LootCore:State(id) local l = self.lots[id]; return l and l.state or nil end
 function LootCore:IsResolved(id) local l = self.lots[id]; return l ~= nil and l.state == STATE.RESOLVED end

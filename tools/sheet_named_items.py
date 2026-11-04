@@ -71,11 +71,11 @@ SPEC_VOCAB = {
 }
 
 # Drops whose 10 and 25 versions share one name. Rules key on the item name, so one of the two would
-# always be discarded. Only the size listed here is emitted keyed by ITEM ID, which the addon prefers
-# over a name; the other keeps the plain name, and the two no longer collide. The sheet is untouched:
-# the ids live here, not in a cell.
+# always be discarded. Both sizes are emitted keyed by ITEM ID, which the addon prefers over a name.
+# Neither may keep the plain name: a size whose sheet row is empty would fall back to it and inherit
+# the other size's priority. The sheet is untouched: the ids live here, not in a cell.
 SIZE_ITEM_IDS = {
-    "reply-code alpha": {"10": 46052},   # Algalon's chest, Gift of the Observer; 25-man stays by name
+    "reply-code alpha": {"10": 46052, "25": 46053},   # Algalon's chest, Gift of the Observer
 }
 
 # Words the guild's own BiS tabs show under two different classes, so the sheet has to say which, the
