@@ -602,6 +602,19 @@ function LootCore:MarkDelivered(id, awardIndex, recipient, when)
     return true
 end
 
+-- Write off one OWED award whose copy no longer exists (a phantom copy that left with its corpse or
+-- chest). Terminal REMOVED, as for a copy that left the bags; consumers hear awardRemoved.
+function LootCore:ForgiveAward(id, awardIndex)
+    local lot = self.lots[id]; if not lot or not lot.awards then return false end
+    local a = lot.awards[awardIndex]
+    if not a or a.state ~= AWARD.OWED then return false end
+    a.state = AWARD.REMOVED
+    self:log("forgive", { id = id, itemId = lot.itemId, winner = a.winner, awardIndex = awardIndex })
+    self:emit("awardRemoved", lot.itemId, a.winner, id)
+    self:emit("ledgerChanged")
+    return true
+end
+
 -- The path TradeDeliver uses: a trade to `player` for `itemId` completed. Marks the oldest
 -- matching owed award delivered (FIFO over that player's owed copies of the item). Phantom
 -- awards are skipped: their copies are never in the ML's bags, so no trade can deliver them

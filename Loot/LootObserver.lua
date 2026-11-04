@@ -208,7 +208,7 @@ function addon:OnUniqueBlockedSlot(slot, itemId, link)
     local shown = link or ("item " .. itemId)
     self:LootAlert(shown .. " is a Unique you already hold: it CANNOT enter your bags and stays on the corpse. It rolls now; re-open the corpse afterwards to send it to the winner.")
     if self.lootCore then
-        self.lootCore:MintPhantom(itemId, 1)
+        local lot = self.lootCore:MintPhantom(itemId, 1)
         self.lootCore:Flush()   -- see WarnMissingQuestDrops: a bare mint is invisible until flushed
     end
 end
@@ -249,9 +249,95 @@ function addon:MarkPhantomAwardDelivered(lotId, recipient)
     return false
 end
 
+-- ML: the phantom copy is gone (its corpse or chest despawned before the pickup). Clear what WeirdLoot
+-- still owes for the lot, ending its loan or send, so the winner and any later ML stop seeing it owed.
+function addon:ForgivePhantomAward(lotId)
+    if not self:IsAuthorizedLootMaster() then return false end
+    local core = self.lootCore
+    local lot = core and core:Get(lotId)
+    if not lot or not lot.phantom or not lot.awards then return false end
+    local loan = self.ActiveMLLoan and self:ActiveMLLoan()
+    if loan and loan.lotId == lotId then self:EndMLLoan("item lost") end
+    if self.phantomSends then self.phantomSends[lotId] = nil end
+    if self.phantomLoans then self.phantomLoans[lotId] = nil end
+    local done = false
+    for idx, a in ipairs(lot.awards) do
+        if a.state == core.AWARD.OWED and core:ForgiveAward(lotId, idx) then done = true end
+    end
+    if not done then return false end
+    local _, link = util:ItemRender(lot.itemId)
+    self:Print((link or "The item") .. " marked lost; it is no longer owed.")
+    self:ShowPhantomSendCard(lotId)
+    if self.RefreshRollsLeftBanner then self:RefreshRollsLeftBanner() end
+    return true
+end
+
+-- A ledger reset (session start or end) takes every pending pickup with it: their lots are gone, and a
+-- send left behind would fire on the next corpse showing that item. Ends a running loan too.
+function addon:DropPhantomPickups()
+    if self.ActiveMLLoan and self:ActiveMLLoan() and self.EndMLLoan then self:EndMLLoan("session reset") end
+    for _, pending in ipairs({ self.phantomSends or {}, self.phantomLoans or {} }) do
+        for lotId in pairs(pending) do
+            if self.CloseAwardCard then self:CloseAwardCard(lotId) end
+        end
+    end
+    self.phantomSends, self.phantomLoans = nil, nil
+end
+
+-- ML: rebuild the pending pickups (corpse sends and loans) from the ledger. They live in memory only,
+-- so after a reload/relog or a handoff an OWED phantom award had no retry and no way to clear it.
+function addon:RestorePhantomPickups()
+    if not self:IsAuthorizedLootMaster() then return end
+    local core = self.lootCore
+    if not core then return end
+    for _, lot in ipairs(core:All()) do
+        if lot.phantom and lot.awards then
+            for _, a in ipairs(lot.awards) do
+                if a.state == core.AWARD.OWED and a.winner then
+                    if lot.invisibleToML then
+                        self.phantomLoans = self.phantomLoans or {}
+                        if not self.phantomLoans[lot.id] then
+                            self.phantomLoans[lot.id] = { itemId = lot.itemId, target = a.winner }
+                            self:ShowPhantomLoanCard(lot.id)
+                        end
+                    else
+                        self.phantomSends = self.phantomSends or {}
+                        if not self.phantomSends[lot.id] then
+                            self.phantomSends[lot.id] = { itemId = lot.itemId, target = a.winner }
+                            self:ShowPhantomSendCard(lot.id)
+                        end
+                    end
+                    break
+                end
+            end
+        end
+    end
+end
+
+-- A dead non-player target means the ML is still working corpses and a pending copy may yet be picked
+-- up, so the send card offers "Item lost" only once they have moved on (no dead creature targeted).
+function addon:HasDeadCreatureTarget()
+    return (UnitExists("target") and UnitIsDead("target") and not UnitIsPlayer("target")) and true or false
+end
+
+-- Redraw the send cards still on screen when the target crosses that line; a dismissed card stays gone.
+function addon:PLAYER_TARGET_CHANGED()
+    local looting = self:HasDeadCreatureTarget()
+    if looting == self._sendCardsLooting then return end
+    self._sendCardsLooting = looting
+    if not self.phantomSends then return end
+    for lotId in pairs(self.phantomSends) do
+        if self:AwardCardShown(lotId) then self:ShowPhantomSendCard(lotId) end
+    end
+end
+
+-- ponytail: matched by item id only; 3.3.5 cannot name a loot window's corpse (the target is a guess), so
+-- the same pure-Unique pending on two corpses at once fulfills from whichever is opened first.
 function addon:PhantomSendForItem(itemId)
     for lotId, send in pairs(self.phantomSends or {}) do
-        if send.itemId == itemId then return lotId, send end
+        if send.itemId == itemId then
+            return lotId, send
+        end
     end
     return nil
 end

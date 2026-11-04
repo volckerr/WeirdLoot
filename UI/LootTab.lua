@@ -328,7 +328,7 @@ function addon:BuildLootTab()
                 -- A disabled bracket (locked item / class-disallowed) shows nothing; only an
                 -- available one spells itself out. Plain Buttons drop mouse scripts while disabled
                 -- anyway, but guard explicitly so intent does not hinge on that default.
-                if not b:IsEnabled() then return end
+                if b:IsEnabled() ~= 1 then return end   -- 3.3.5 returns 1/0, and 0 is truthy
                 -- getOptions (declared later in this file) is not in scope here; read directly. The
                 -- key is seeded true by ensureDefaults, so a missing value never reads as "off".
                 local opts = addon.db and addon.db.options

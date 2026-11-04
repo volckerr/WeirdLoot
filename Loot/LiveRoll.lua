@@ -2283,8 +2283,12 @@ function addon:ShowPhantomSendCard(lotId)
 
     if send then
         item.corpseSend = true
+        item.currentTarget = send.target
         item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
         item.onAward = function(who) self:SetPhantomSendTarget(lotId, who) end
+        if not self:HasDeadCreatureTarget() then
+            item.onForgive = function() self:ConfirmForgivePhantom(lotId) end
+        end
         item.onReroll = function()
             self.phantomSends[lotId] = nil
             if self:UnlockSessionRoll(lotId) then self:StartLiveRoll(lotId) end
@@ -2332,6 +2336,8 @@ function addon:ShowPhantomLoanCard(lotId)
             end
             item.candidates = { cand or { name = target } }
             item.onAward = function(who) self:StartMLLoan(lotId, who) end
+            -- not while a loan runs: that would cut off a pickup in progress
+            item.onForgive = function() self:ConfirmForgivePhantom(lotId) end
         end
         item.onReroll = function()
             local active = self:ActiveMLLoan()
@@ -2341,6 +2347,18 @@ function addon:ShowPhantomLoanCard(lotId)
         end
     end
     self:AddLootBannerItem(item)
+end
+
+function addon:ConfirmForgivePhantom(lotId)
+    local lot = self.lootCore and self.lootCore:Get(lotId)
+    if not lot then return end
+    local winner
+    for _, a in ipairs(lot.awards or {}) do
+        if a.state == self.lootCore.AWARD.OWED then winner = a.winner; break end
+    end
+    local _, link = util:ItemRender(lot.itemId)
+    StaticPopup_Show("WEIRDLOOT_FORGIVE_PHANTOM", link or "the item", winner or "the winner",
+        { lotId = lotId, itemLink = link })
 end
 
 -- pack sections for WIN: "label~name=roll,name=roll" joined by ";"

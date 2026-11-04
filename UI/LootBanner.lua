@@ -248,23 +248,81 @@ end
 
 -- LC award flyout: pooled clickable candidate rows live on the card's LCFlyout panel (built in
 -- createLootFrame). Each row awards the next copy to that candidate.
-local FLYOUT_ROW_H = 15
+local FLYOUT_ROW_H = 20       -- the name is a real button (same template as Reroll): it reads as clickable
+local FLYOUT_STEP = FLYOUT_ROW_H + 2
+local FLYOUT_GAP = 6          -- extra space above the separate "item lost" button
+local FLYOUT_W = 200
+local NAME_W = 96             -- name buttons share one width so roll and pick line up in columns
+local ROLL_W, PICK_W = 24, 44
+-- Flyout buttons are drawn here (backdrop + highlight), not UIPanelButtonTemplate: that template swaps
+-- named layer textures in its own scripts, so tints and a held "pressed" look do not stick, and its
+-- scripts index _G[name .. "Left"], which breaks on unnamed buttons.
+local FLYOUT_BACKDROP = {
+    bgFile = "Interface\\Buttons\\WHITE8x8",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = false, edgeSize = 10,
+    insets = { left = 2, right = 2, top = 2, bottom = 2 },
+}
+local NAME_LOOK   = { bg = { 0.20, 0.19, 0.18, 0.95 }, edge = { 0.55, 0.50, 0.40, 0.9 } }
+local PRESS_LOOK  = { bg = { 0.06, 0.06, 0.05, 0.98 }, edge = { 1.00, 0.82, 0.00, 1.0 } }
+local ACTION_LOOK = { bg = { 0.30, 0.05, 0.04, 0.95 }, edge = { 0.70, 0.25, 0.15, 0.9 } }
+
+local function applyLook(row, look, sunk)
+    row:SetBackdropColor(unpack(look.bg))
+    row:SetBackdropBorderColor(unpack(look.edge))
+    row.textX, row.textY = 0, sunk and -1 or 0
+end
+
 local function lcFlyoutRow(frame, i)
     local row = frame.LCRows[i]
     if not row then
         row = CreateFrame("Button", nil, frame.LCFlyout)
         row:SetHeight(FLYOUT_ROW_H)
-        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        row.text:SetPoint("LEFT", row, "LEFT", 3, 0)
-        row.text:SetJustifyH("LEFT")
+        row:SetBackdrop(FLYOUT_BACKDROP)
         local hl = row:CreateTexture(nil, "HIGHLIGHT")
-        hl:SetAllPoints()
-        hl:SetTexture("Interface\\QuestFrame\\UI-QuestTitleHighlight")
+        hl:SetPoint("TOPLEFT", row, "TOPLEFT", 3, -3)
+        hl:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -3, 3)
+        hl:SetTexture(1, 0.82, 0, 0.16)   -- an even gold wash over the whole button on hover
         hl:SetBlendMode("ADD")
-        hl:SetAlpha(0.5)
+        row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        -- roll and pick are plain text beside the button: only the name is clickable
+        row.roll = frame.LCFlyout:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        row.roll:SetWidth(ROLL_W)
+        row.roll:SetJustifyH("RIGHT")
+        row.roll:SetPoint("LEFT", row, "RIGHT", 6, 0)
+        row.pick = frame.LCFlyout:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        row.pick:SetWidth(PICK_W)
+        row.pick:SetJustifyH("LEFT")
+        row.pick:SetPoint("LEFT", row.roll, "RIGHT", 6, 0)
         frame.LCRows[i] = row
     end
     return row
+end
+
+-- A name row: fixed-width button with its label left-aligned, roll and pick shown beside it.
+-- pressed: the send target, drawn sunk in (darker, gold edge, label a pixel lower).
+local function placeNameRow(frame, row, y, pressed)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", frame.LCFlyout, "TOPLEFT", 8, y)
+    row:SetWidth(NAME_W)
+    applyLook(row, pressed and PRESS_LOOK or NAME_LOOK, pressed)
+    row.text:ClearAllPoints()
+    row.text:SetPoint("LEFT", row, "LEFT", 8, row.textY)
+    row.text:SetPoint("RIGHT", row, "RIGHT", -4, row.textY)
+    row.text:SetJustifyH("LEFT")
+    row.roll:Show(); row.pick:Show()
+end
+
+-- An action row (Cancel loan, Item lost): full-width button, centered label, no stats.
+local function placeActionRow(frame, row, y)
+    row:ClearAllPoints()
+    row:SetPoint("TOPLEFT", frame.LCFlyout, "TOPLEFT", 8, y)
+    row:SetPoint("TOPRIGHT", frame.LCFlyout, "TOPRIGHT", -8, y)
+    applyLook(row, ACTION_LOOK, false)
+    row.text:ClearAllPoints()
+    row.text:SetPoint("CENTER", row, "CENTER", 0, 0)
+    row.text:SetJustifyH("CENTER")
+    row.roll:Hide(); row.pick:Hide()
 end
 
 -- Fill and show the loot master's LC award flyout: header ("Award copy k of N"), one clickable row per
@@ -285,10 +343,8 @@ local function populateLCFlyout(frame, data)
     if data.onLoanCancel then
         frame.LCFlyoutHeader:SetText("|cffffd200Master loot lent out|r")
         local row = lcFlyoutRow(frame, 1)
-        row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", frame.LCFlyout, "TOPLEFT", 5, -20)
-        row:SetPoint("TOPRIGHT", frame.LCFlyout, "TOPRIGHT", -5, -20)
-        row.text:SetText("|cffff6060Cancel loan|r")
+        placeActionRow(frame, row, -20)
+        row.text:SetText("|cffff8080Cancel loan|r")
         row.awardName = nil
         row:SetScript("OnClick", function() if data.onLoanCancel then data.onLoanCancel() end end)
         row:Show()
@@ -299,32 +355,45 @@ local function populateLCFlyout(frame, data)
         local nextCopy = math.min(total - remaining + 1, total)
         if data.loanSend then
             -- invisible phantom: rows lend the WoW ML role so the picked player collects the drop
-            frame.LCFlyoutHeader:SetText("|cffffd200Loan master loot to|r")
+            frame.LCFlyoutHeader:SetText("|cffffd200Loan master loot to:|r")
         elseif data.corpseSend then
             -- phantom send card: rows retarget the pending master-loot send, not an LC award
-            frame.LCFlyoutHeader:SetText("|cffffd200Send from corpse to|r")
+            frame.LCFlyoutHeader:SetText("|cffffd200Send from corpse to:|r")
         else
             frame.LCFlyoutHeader:SetText(total > 1
-                and ("|cffffd200Award copy " .. nextCopy .. " of " .. total .. "|r")
-                or "|cffffd200Award to|r")
+                and ("|cffffd200Award copy " .. nextCopy .. " of " .. total .. " to:|r")
+                or "|cffffd200Award to:|r")
         end
 
         for i, c in ipairs(cands) do
             local row = lcFlyoutRow(frame, i)
-            local y = -20 - (i - 1) * FLYOUT_ROW_H
-            row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", frame.LCFlyout, "TOPLEFT", 5, y)
-            row:SetPoint("TOPRIGHT", frame.LCFlyout, "TOPRIGHT", -5, y)
-            local rollText = c.roll and tostring(c.roll) or "-"
-            row.text:SetText(colorName(c.name, c.class) .. "  |cffbbbbbb" .. rollText .. "|r  |cffffd200" .. (c.bracket or "") .. "|r")
+            -- the send target is drawn pressed in; nothing to mark when there is one name
+            local current = data.currentTarget and #cands > 1 and c.name
+                and util:NormalizeKey(c.name) == util:NormalizeKey(data.currentTarget) or false
+            placeNameRow(frame, row, -20 - (i - 1) * FLYOUT_STEP, current)
+            row.text:SetText(colorName(c.name, c.class))
+            row.roll:SetText("|cffbbbbbb" .. (c.roll and tostring(c.roll) or "-") .. "|r")
+            row.pick:SetText(c.bracket or "")
             row.awardName = c.name
             row:SetScript("OnClick", function() if data.onAward then data.onAward(row.awardName) end end)
             row:Show()
             shown = i
         end
+        if data.onForgive then
+            shown = shown + 1
+            local row = lcFlyoutRow(frame, shown)
+            placeActionRow(frame, row, -20 - (shown - 1) * FLYOUT_STEP - FLYOUT_GAP)
+            row.text:SetText("|cffff8080Item lost: stop owing it|r")
+            row.awardName = nil
+            row:SetScript("OnClick", function() if data.onForgive then data.onForgive() end end)
+            row:Show()
+        end
     end
-    for i = shown + 1, #frame.LCRows do frame.LCRows[i]:Hide() end
-    frame.LCFlyout:SetHeight(24 + shown * FLYOUT_ROW_H)
+    for i = shown + 1, #frame.LCRows do
+        local r = frame.LCRows[i]
+        r:Hide(); r.roll:Hide(); r.pick:Hide()
+    end
+    frame.LCFlyout:SetHeight(26 + shown * FLYOUT_STEP + ((data.onForgive and not data.onLoanCancel) and FLYOUT_GAP or 0))
     frame.LCFlyout:ClearAllPoints()
     if bannerMLSide() == "LEFT" then
         frame.LCFlyout:SetPoint("TOPRIGHT", frame, "TOPLEFT", -6, 2)
@@ -1084,7 +1153,7 @@ local function buildBanner(bannerName, medallionCfg)
         -- LC award flyout (loot master only): a panel off the card's ML-controls side, populated in the
         -- won-card configure path (populateLCFlyout) with one clickable candidate row per roller/named.
         frame.LCFlyout = CreateFrame("Frame", nil, frame)
-        frame.LCFlyout:SetWidth(160)
+        frame.LCFlyout:SetWidth(FLYOUT_W)
         frame.LCFlyout:SetBackdrop({
             bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1959,6 +2028,8 @@ local function buildBanner(bannerName, medallionCfg)
             awarded = item.awarded,         -- LC award card (ML): winners assigned so far
             onReroll = item.onReroll,   -- won card only: ML reroll callback; present = show the Reroll button
             onLoanCancel = item.onLoanCancel, -- phantom loan card (ML): mid-loan; the flyout shows Cancel instead of the offer
+            onForgive = item.onForgive, -- phantom send/loan card (ML): last flyout row writes the lost copy off
+            currentTarget = item.currentTarget, -- phantom send/loan card (ML): who the pickup goes to now (marked "current")
             rollRemaining = item.rollRemaining, -- static seconds-left (demo/plain data; ignored with a thunk)
             getTimeLeft = item.getTimeLeft, -- live feed: per-tick seconds left from the roll's own deadline
             key = item.key,             -- roll card only: lets the live feed close/update the card by id
@@ -2355,6 +2426,13 @@ function addon:AddLootBannerItem(item)
     awardedBanner:AddItem(item)
 end
 
+function addon:AwardCardShown(key)
+    for _, f in ipairs(awardedBanner.LootFrames or {}) do
+        if f.alive and not f.fading and f.rowKey == key then return true end
+    end
+    return false
+end
+
 function addon:AddRollBannerItem(item)
     local ok = dropsBanner:AddItem(item)
     self:RefreshRollsLeftBanner()   -- the lot just left "upcoming" for a live card; recount
@@ -2374,6 +2452,26 @@ function addon:CloseRollBannerCard(key)
         end
     end
     self:RefreshRollsLeftBanner()   -- a card ended (resolved/cancelled); the count may have changed
+end
+
+-- Close a win card by its key (the lot id) when its lot no longer exists, e.g. a pending pickup dropped
+-- by a ledger reset. Clears the dedupe key so a later lot with the same id gets its own card.
+function addon:CloseAwardCard(key)
+    if not key then return end
+    awardedBanner.seenKeys[key] = nil
+    -- not shown yet: right after a reload the banner queues cards until it plays
+    local queued = awardedBanner.pendingLoot
+    for i = #queued, 1, -1 do
+        if queued[i].key == key then table.remove(queued, i) end
+    end
+    for _, f in ipairs(awardedBanner.LootFrames) do
+        if f.alive and not f.fading and f.rowKey == key then
+            f.rowKey = nil
+            if f.LCFlyout then f.LCFlyout:Hide() end
+            if f.RerollButton then f.RerollButton:Hide() end
+            f.FadeOutNow()
+        end
+    end
 end
 
 -- Test kit (/wl debug probe, /wl debug click): the live roll cards as { key = roll id, buttons = bracket

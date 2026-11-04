@@ -152,6 +152,18 @@ StaticPopupDialogs["WEIRDLOOT_REROLL_ITEM"] = {
     hideOnEscape = 1,
 }
 
+StaticPopupDialogs["WEIRDLOOT_FORGIVE_PHANTOM"] = {
+    text = "Mark %s as lost? %s will no longer be owed it.",
+    button1 = YES,
+    button2 = NO,
+    OnAccept = function(self)
+        if self.data and self.data.lotId then addon:ForgivePhantomAward(self.data.lotId) end
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+}
+
 StaticPopupDialogs["WEIRDLOOT_END_SESSION"] = {
     text = "End the current WeirdLoot session and clear its state?",
     button1 = YES,

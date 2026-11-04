@@ -261,6 +261,9 @@ function self.makeWorld(playerName, isML, globals)
     env.math = setmetatable({ random = rng }, { __index = math })
     env.UnitName = function(unit) if unit == "NPC" then return env.__tradePartner end return playerName end
     env.GetUnitName = function() return playerName end
+    env.UnitExists = function() return false end
+    env.UnitIsDead = function() return false end
+    env.UnitIsPlayer = function(unit) return unit == "player" or (unit and unit:find("^raid")) and true or false end
     env.UnitGUID = function() return "Player-0-000000" .. tostring(#playerName) end
     env.GetRealmName = function() return "TestRealm" end
     -- player class is settable per world (default Warrior) so class-gated behavior is testable;

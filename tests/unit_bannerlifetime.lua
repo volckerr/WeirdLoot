@@ -449,4 +449,25 @@ test("test kit: probe logs a roll card's enabled brackets; click presses only an
     eq(recs[#recs].missing, true, "a miss is logged")
 end)
 
+test("CloseAwardCard drops a card still queued before the banner plays, and closes a shown one", function()
+    local w = bannerWorld(true, function(opt)
+        opt.forceKeepResultPopup = true
+        opt.resultPopupAutoCloseEnabled = true
+        opt.resultPopupAutoCloseSeconds = 10
+    end)
+    local item = { key = "L:9" }
+    for k, v in pairs(WON) do item[k] = v end
+    w.addon:AddLootBannerItem(item)                 -- queued: no pump yet, like right after a reload
+    w.addon:CloseAwardCard("L:9")
+    for _ = 1, 60 do F.pump(w, 0.001) end
+    check(not firstWonRow(w), "the queued card never appears")
+    w.addon:AddLootBannerItem(item)
+    local row
+    for _ = 1, 60 do F.pump(w, 0.001); row = firstWonRow(w); if row then break end end
+    check(row and row.rowKey == "L:9", "the same key can show again later")
+    w.addon:CloseAwardCard("L:9")
+    pumpN(w, 1.0, 3)
+    check(not row.alive, "a shown card fades out")
+end)
+
 F.endSuite()
