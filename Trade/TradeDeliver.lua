@@ -591,8 +591,26 @@ function Engine:Owe(player, itemId, count, link)
         found = { id = itemId, link = link, count = count }
         entry.items[#entry.items + 1] = found
     end
-    if self.payoutActive then self:WhisperOwed(entry.name) end
+    if self.payoutActive then self:_whisperOwedSoon(entry.name) end
     return found.count
+end
+
+-- Wins from one boss land seconds apart (rolls end together or one by one), so the come-trade
+-- whisper waits until no new win arrives for OWE_WHISPER_DELAY and then lists everything owed in
+-- one line, instead of one whisper per item.
+local OWE_WHISPER_DELAY = 2
+function Engine:_whisperOwedSoon(name)
+    self._oweTimers = self._oweTimers or {}
+    local key = name:lower()
+    local t = self._oweTimers[key]
+    if t then t.left = OWE_WHISPER_DELAY return end
+    t = { left = OWE_WHISPER_DELAY }
+    t.fn = function()
+        self._oweTimers[key] = nil
+        if self.payoutActive then self:WhisperOwed(name) end
+    end
+    self._oweTimers[key] = t
+    timerQueue[#timerQueue + 1] = t
 end
 
 function Engine:Forgive(player, itemId)

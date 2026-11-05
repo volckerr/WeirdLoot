@@ -1048,6 +1048,30 @@ test("payout stays in sync live: an owed copy leaving the bags forgives the owe 
     eq(owedCount(w), 0, "payout forgave the owe when the core retired the award (no drift)")
 end)
 
+test("payout: two wins close together send one come-trade whisper listing both", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local whispers = {}
+    w.env.ChatThrottleLib = nil
+    w.env.SendChatMessage = function(msg, kind, _, target)
+        if kind == "WHISPER" then whispers[#whispers + 1] = { msg = msg, target = target } end
+    end
+    w.addon.payout.payoutActive = true
+    w.addon.payout:Owe("Alice", 40005, 1, "|cffffffff|Hitem:40005|h[Blade]|h|r")
+    F.pump(w, 1.0)
+    w.addon.payout:Owe("Alice", 40006, 1, "|cffffffff|Hitem:40006|h[Shield]|h|r")
+    F.pump(w, 1.5)
+    eq(#whispers, 0, "still waiting: the second win restarted the delay")
+    F.pump(w, 1.0)
+    eq(#whispers, 1, "one whisper once the wins stop")
+    check(whispers[1].target == "Alice" and whispers[1].msg:find("[Blade]", 1, true)
+        and whispers[1].msg:find("[Shield]", 1, true), "it lists both items")
+    w.addon.payout:Owe("Bob", 40007, 1, "|cffffffff|Hitem:40007|h[Ring]|h|r")
+    w.addon.payout:Forgive("Bob", 40007)
+    F.pump(w, 4.0)
+    eq(#whispers, 1, "an owe forgiven before the whisper sends nothing")
+end)
+
 test("payout vs bags: an owe we still hold is kept", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
