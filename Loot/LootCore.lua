@@ -352,7 +352,16 @@ function LootCore:reconcileItem(itemId, want, fresh, protectOwed)
 
     if want > live then
         local diff = want - live
-        local open = self:openLotForItem(itemId)
+        -- A fresh drop never joins an idle lot: idle copies are ones the ML chose not to roll (carried
+        -- into the session, or unlocked), so growing that lot would hide the new drop with no roll.
+        local open
+        if fresh then
+            for _, lot in ipairs(self:lotsForItem(itemId)) do
+                if isOpen(lot) and not lot.phantom and lot.state ~= STATE.IDLE then open = lot break end
+            end
+        else
+            open = self:openLotForItem(itemId)
+        end
         if open and not open.awards then
             open.count = open.count + diff
             if fresh and open.state == STATE.SKIPPED then open.state = STATE.NEW end
@@ -377,9 +386,16 @@ function LootCore:retireFromItem(itemId, n, protectOwed)
     local retired = 0
     self:log("retire", { itemId = itemId, n = n })
 
-    -- 1. shrink the open lot's pre-roll count
-    local open = self:openLotForItem(itemId)
-    if open and not open.awards and remaining > 0 then
+    -- 1. shrink the open lots' pre-roll counts, least committed first (an item can have an idle lot
+    --    and a fresh one side by side; see reconcileItem)
+    local rank = { [STATE.IDLE] = 1, [STATE.SKIPPED] = 2, [STATE.NEW] = 3, [STATE.PENDING] = 4 }
+    local opens = {}
+    for _, lot in ipairs(self:lotsForItem(itemId)) do
+        if isOpen(lot) and not lot.phantom and not lot.awards then opens[#opens + 1] = lot end
+    end
+    table.sort(opens, function(x, y) return rank[x.state] < rank[y.state] end)
+    for _, open in ipairs(opens) do
+        if remaining <= 0 then break end
         local take = math.min(remaining, open.count)
         open.count = open.count - take
         remaining = remaining - take

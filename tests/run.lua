@@ -92,6 +92,22 @@ test("session start baselines existing loot as idle (no auto-roll)", function()
     check(w.addon.lootCore:State(lot.id) ~= "pending", "not auto-surfaced")
 end)
 
+test("a drop of an item the ML already carries surfaces on its own; the carried copy stays idle", function()
+    local w = makeWorld("Masterlooter", true)
+    setBag(w, 40001, 1)             -- carried into the session
+    startSession(w)
+    setBag(w, 40001, 2)             -- the same item drops again
+    bagUpdate(w)
+    local idle, surfaced = 0, 0
+    for _, l in ipairs(w.addon.lootCore:lotsForItem(40001)) do
+        if l.state == "idle" then idle = idle + l.count end
+        if l.state == "pending" then surfaced = surfaced + l.count end
+    end
+    eq(idle, 1, "the carried copy is still idle")
+    eq(surfaced, 1, "the new drop is surfaced for rolling, not hidden in the idle lot")
+    eq(#w.addon.lootView.items, 2, "both show in the loot list")
+end)
+
 test("fresh drop mints a NEW lot and auto-surfaces (pending)", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
