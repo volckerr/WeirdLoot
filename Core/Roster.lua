@@ -309,7 +309,25 @@ function addon:RefreshLootAuthority()
     -- FRESH-SESSION PROMPT (Session.lua): on the false->true transition ask whether the still-active
     -- session belongs to this raid, and stay non-authoritative until answered. The roster still
     -- names us, so every reader sees who the ML is; only IsAuthorizedLootMaster is withheld.
-    if isLootMaster and not wasLootMaster and not self._mlPromptAnswering
+    -- A loot-method change is not a handoff: Mimiron's phase 3 drops master loot and the server puts
+    -- it back after. When master loot returns to us for the same session we were running, carry on
+    -- without the prompt. Only the method leaving "master" while we stay in the raid arms this;
+    -- another player named loot master (a real handoff) or leaving the raid disarms it.
+    local sessionId = self.session and self.session.id
+    if (GetNumRaidMembers() or 0) == 0 then
+        self._mlMethodPause = nil
+    elseif wasLootMaster and not isLootMaster and method ~= "master" then
+        self._mlMethodPause = sessionId
+    elseif method == "master" and lootMasterName and not isLootMaster then
+        self._mlMethodPause = nil
+    end
+    local methodResumed = isLootMaster and not wasLootMaster and sessionId ~= nil
+        and self._mlMethodPause == sessionId
+    if methodResumed then
+        self._mlMethodPause = nil
+        self:LogCoreEvent("ml-resume", { epoch = sessionId })
+    end
+    if isLootMaster and not wasLootMaster and not self._mlPromptAnswering and not methodResumed
         and self:ShouldPromptFreshSessionOnML(loan) then
         self:PromptFreshSessionOnML()
     end

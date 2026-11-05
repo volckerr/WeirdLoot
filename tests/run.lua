@@ -3577,6 +3577,50 @@ test("ml-prompt: losing and regaining ML asks again (every time, not once per lo
     eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "asked again on the second gain")
 end)
 
+test("ml-prompt: the loot method leaving master and coming back (Mimiron) does not ask again", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w); dialog(w).OnCancel()
+    local master = w.env.GetLootMethod
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), false, "group loot: not the ML")
+    w.env.GetLootMethod = master
+    local shown = engageML(w)
+    eq(shown, nil, "master loot back on us: no prompt")
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority back at once")
+    eq(w.addon.session.id, "5", "same session carried on")
+    w.env.GetRaidRosterInfo = function(i) return (i == 1) and "Masterlooter" or "Promotee", 0 end
+    w.addon:RefreshLootAuthority()
+    shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "a later handoff and back still asks")
+end)
+
+test("ml-prompt: after a loot-method change, a handoff to another ML or leaving the raid asks again", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w); dialog(w).OnCancel()
+    local master = w.env.GetLootMethod
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    w.env.GetLootMethod = master
+    w.env.GetRaidRosterInfo = function(i) return (i == 1) and "Masterlooter" or "Promotee", 0 end
+    w.addon:RefreshLootAuthority()                           -- master loot returns, but to someone else
+    local shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "handoff in between: asked")
+    dialog(w).OnCancel()
+
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    local raid = w.env.GetNumRaidMembers
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.addon:RefreshLootAuthority()                           -- left the raid
+    w.env.GetNumRaidMembers = raid
+    w.env.GetLootMethod = master
+    shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "left the raid in between: asked")
+end)
+
 test("ml-prompt: no active session = no prompt, authority lands at once", function()
     local w = makeWorld("Promotee", false)
     local shown = engageML(w)
