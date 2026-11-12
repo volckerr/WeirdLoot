@@ -516,6 +516,16 @@ function addon:AnswerFreshSessionOnML(fresh)
     self._mlPromptAnswering = nil
 end
 
+-- Everything keyed by the old ledger's lot ids goes with it: rolls, popups, win cards, queued roll
+-- starts and recorded roll ends (the new ledger reuses the ids for different lots).
+local function dropLedgerState(self)
+    self:DropPhantomPickups()
+    if self.DropStaleLiveRolls then self:DropStaleLiveRolls() end
+    if self.DropStaleAwardCards then self:DropStaleAwardCards() end
+    self._rollBatch = nil
+    self.session.rollEnds = {}
+end
+
 function addon:StartLootSession()
     if not self:IsAuthorizedLootMaster() then
         self:Print("Only the loot master can start a loot session.")
@@ -548,7 +558,7 @@ function addon:StartLootSession()
 
     -- Wipe the ledger and baseline the loot already in bags as idle (not fresh drops), so a
     -- session started mid-bag does not auto-roll everything the ML is already carrying.
-    self:DropPhantomPickups()
+    dropLedgerState(self)
     self.lootCore:Reset()
     local eligible = self:ItemIdCounts(self:BuildTradeableEpicCounts())
     self.session.prevEligible = eligible
@@ -585,7 +595,7 @@ function addon:ClearSession()
     self.session.prevEligible = {}
     self.session.lcOverrides = {}        -- temporary LC priorities die with the session
     self.lootView = { items = {}, results = {} }
-    self:DropPhantomPickups()
+    dropLedgerState(self)
     self.lootCore:Reset()
     self:TriggerCallback("SESSION_UPDATED")
 end

@@ -394,6 +394,7 @@ end
 function addon:SyncApplySnapshot(lines, epoch)
     -- An empty epoch means the authority has no active session (it answered a request with an
     -- empty snapshot). Don't fabricate a session: mark inactive rather than show a phantom one.
+    local prevEpoch = self.session.id
     self.session.id = epoch
     self.session.active = epoch ~= nil and epoch ~= ""
     -- Track the epoch so our next mint stays above it, and remember that this session is a LIVE mirror
@@ -432,6 +433,28 @@ function addon:SyncApplySnapshot(lines, epoch)
             lots[#lots + 1] = lot
             seq = math.max(seq, lotSeq)
             self:StashRollRemaining(lot, remaining)   -- before ApplyRemote -> ledgerChanged -> SyncRollPopups
+        end
+    end
+    -- A new epoch is a handoff (same lots, continued) or a new session (lot ids reused for other
+    -- items, all starting idle). Drop the rolls and win cards whose lot is not the same item in the
+    -- same state any more, before the apply restores rolls for the new lots.
+    if prevEpoch and prevEpoch ~= "" and prevEpoch ~= epoch then
+        local byId = {}
+        for _, lot in ipairs(lots) do byId[lot.id] = lot end
+        local ROLLING = self.lootCore.STATE.ROLLING
+        if self.DropStaleLiveRolls then
+            self:DropStaleLiveRolls(function(id, roll)
+                local lot = byId[id]
+                return lot and lot.itemId == roll.itemId and lot.state == ROLLING
+            end)
+        end
+        if self.DropStaleAwardCards then
+            local prior = {}
+            for _, lot in ipairs(self.lootCore:All()) do prior[lot.id] = lot.itemId end
+            self:DropStaleAwardCards(function(key)
+                local lot = byId[key]
+                return lot and lot.itemId == prior[key] and lot.awards and #lot.awards > 0
+            end)
         end
     end
     self.lootCore:ApplyRemote({ seq = seq, lots = lots })

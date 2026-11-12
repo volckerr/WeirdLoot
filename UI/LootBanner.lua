@@ -2474,6 +2474,20 @@ function addon:CloseAwardCard(key)
     end
 end
 
+-- Win cards keyed by lots of an old ledger: a reused lot id would act on the wrong lot, and the
+-- leftover dedupe key would hide the new lot's win card. keep(key) picks the survivors; without it
+-- every card goes.
+function addon:DropStaleAwardCards(keep)
+    local keys = {}
+    for key in pairs(awardedBanner.seenKeys) do keys[#keys + 1] = key end
+    for _, data in ipairs(awardedBanner.pendingLoot) do
+        if data.key then keys[#keys + 1] = data.key end
+    end
+    for _, key in ipairs(keys) do
+        if not (keep and keep(key)) then self:CloseAwardCard(key) end
+    end
+end
+
 -- Test kit (/wl debug probe, /wl debug click): the live roll cards as { key = roll id, buttons = bracket
 -- buttons }, so a scripted client reads and presses the same buttons a raider would.
 function addon:DebugRollCards()

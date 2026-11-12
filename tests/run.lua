@@ -202,6 +202,53 @@ test("ML reload mid-roll: a roll whose end passed during the reload resolves at 
     eq(w.addon.session.rollEnds[lot.id], nil, "and its recorded end is pruned")
 end)
 
+test("new session: the ML drops the old ledger's rolls, cards and roll ends (lot ids are reused)", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 40005, 1); bagUpdate(w)
+    local lot = openLot(w, 40005)
+    w.addon:StartLiveRoll(lot.id)
+    local closedBefore = #w.addon._rollBannerClosed
+    F.advanceClock(20)
+    startSession(w)
+    eq(next(w.addon.live.rolls), nil, "no live roll survives the new session")
+    eq(next(w.addon.session.rollEnds), nil, "nor a recorded roll end")
+    check(#w.addon._rollBannerClosed > closedBefore, "the old roll's card was closed")
+    local idle = openLot(w, 40005)
+    eq(idle and idle.id, lot.id, "the carried copy baselines idle under the same lot id")
+    w.addon:StartLiveRoll(idle.id)
+    local r = w.addon.live.rolls[idle.id]
+    check(r and r.owner, "rolling that lot gives the ML a new owner roll")
+    eq(math.floor(r.deadline - w.env.GetTime() + 0.5), r.duration, "with a full timer, not the old end")
+end)
+
+test("new epoch on a raider: a handoff keeps rolls and win cards, a new session drops them", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    startSession(ml)
+    setBag(ml, 40004, 1); setBag(ml, 40005, 1); bagUpdate(ml)
+    local won, rolling = openLot(ml, 40004), openLot(ml, 40005)
+    ml.addon:StartLiveRoll(won.id)
+    ml.addon:RegisterInterest(won.id, "Raidertwo", "ms")
+    ml.addon:ResolveLiveRoll(won.id)
+    ml.addon:StartLiveRoll(rolling.id)
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    check(raider.addon.live.rolls[rolling.id], "raider has the open roll")
+
+    local kept
+    raider.addon.DropStaleAwardCards = function(_, keep) kept = keep end
+    ml.addon.session.id = ml.addon:NextEpoch()            -- handoff: same ledger, new epoch
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    check(raider.addon.live.rolls[rolling.id], "a handoff keeps the open roll")
+    check(kept and kept(won.id), "and the win card of the awarded lot")
+
+    startSession(ml)                                       -- new session: both copies baseline idle
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    eq(raider.addon.live.rolls[rolling.id], nil, "a new session drops the old roll")
+    check(not kept(won.id), "and the old win card")
+end)
+
 test("top-N: 2x drop, 3 rollers -> 2 distinct owed winners", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)

@@ -1625,6 +1625,20 @@ function addon:CloseInterestPopup(roll)
     end
 end
 
+-- Lot ids restart at L:1 on every ledger reset, so a live roll left from the old ledger names a
+-- different lot: End or a pick would act on the wrong item, and its dedupe key hides the new lot's
+-- card. keep(id, roll) picks the survivors; without it every roll goes.
+function addon:DropStaleLiveRolls(keep)
+    if not (self.live and self.live.rolls) then return end
+    for id, roll in pairs(self.live.rolls) do
+        if not (keep and keep(id, roll)) then
+            self:CloseInterestPopup(roll)
+            self.live.rolls[id] = nil
+        end
+    end
+    compactPopups(self)
+end
+
 -- choose MS/OS/TM/Pass on a popup. The popup stays open after a choice (so everyone
 -- sees the roll's progress) and the chosen button is highlighted. The sole exception
 -- is Pass for a non-ML roller, which dismisses the loot immediately; the ML never
