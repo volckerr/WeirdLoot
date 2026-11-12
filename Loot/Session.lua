@@ -601,6 +601,14 @@ function addon:ClearSession()
     self.lootView = { items = {}, results = {} }
     dropLedgerState(self)
     self.lootCore:Reset()
+    -- No session means no epoch. The ML tells the raid with one snapshot at the empty epoch (raiders
+    -- read it as "no active session" and drop the old rolls and cards); otherwise they keep the ended
+    -- session, since heartbeats stop and nothing else would reach them.
+    self.session.id = nil
+    if self:IsAuthorizedLootMaster() and self.syncChannel then
+        self.syncChannel:Broadcast(true)
+        self.lootCore:DrainDirty()
+    end
     self:TriggerCallback("SESSION_UPDATED")
 end
 

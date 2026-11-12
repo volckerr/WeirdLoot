@@ -249,6 +249,32 @@ test("new epoch on a raider: a handoff keeps rolls and win cards, a new session 
     check(not kept(won.id), "and the old win card")
 end)
 
+test("ending the session reaches raiders: their session ends and the old rolls and cards go", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    startSession(ml)
+    setBag(ml, 40004, 1); setBag(ml, 40005, 1); bagUpdate(ml)
+    local won, rolling = openLot(ml, 40004), openLot(ml, 40005)
+    ml.addon:StartLiveRoll(won.id)
+    ml.addon:RegisterInterest(won.id, "Raidertwo", "ms")
+    ml.addon:ResolveLiveRoll(won.id)
+    ml.addon:StartLiveRoll(rolling.id)
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    check(raider.addon.session.active and raider.addon.live.rolls[rolling.id], "raider mirrors the session and roll")
+    local kept
+    raider.addon.DropStaleAwardCards = function(_, keep) kept = keep end
+
+    clearWire()
+    ml.addon:ClearSession()
+    check(#F.WIRE > 0, "ending the session sends the raid a snapshot")
+    flushWireTo(raider)
+    eq(raider.addon.session.active, false, "the raider's session ends")
+    eq(raider.addon.live.rolls[rolling.id], nil, "its open roll goes")
+    check(kept and not kept(won.id), "and its win cards")
+    eq(#raider.addon.lootCore:All(), 0, "and its ledger mirror is empty")
+end)
+
 test("top-N: 2x drop, 3 rollers -> 2 distinct owed winners", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
