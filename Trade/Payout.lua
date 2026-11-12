@@ -71,7 +71,7 @@ end
 
 function addon:OnAwardRemovedPayout(itemId, winner)
     if not self.payout or not self:IsAuthorizedLootMaster() then return end
-    if winner then self.payout:Forgive(winner, itemId) end
+    if winner then self.payout:Forgive(winner, itemId, 1) end   -- one copy; the winner may be owed more
 end
 
 function addon:OnLotResolvedPayout(lot)
@@ -102,7 +102,7 @@ end
 function addon:OnLotUnlockedPayout(lot, winners)
     if not self.payout or not self:IsAuthorizedLootMaster() then return end
     for _, winner in ipairs(winners or {}) do
-        self.payout:Forgive(winner, lot.itemId)
+        self.payout:Forgive(winner, lot.itemId, 1)   -- one copy per award; other copies stay owed
     end
 end
 

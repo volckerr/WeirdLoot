@@ -49,8 +49,8 @@
           Add `count` (default 1) of itemId to player's owed list (aggregates with
           any existing entry for that item). `link` is optional, for display only.
           If payout is active, the player is whispered to come trade.
-      engine:Forgive(player [, itemId]) -> removed?   remove one item, or (no
-          itemId) the player's whole entry.
+      engine:Forgive(player [, itemId] [, count]) -> removed?   drop `count` copies of
+          itemId (all of them without a count), or (no itemId) the player's whole entry.
       engine:GetOwed([player]) -> table   live ledger (all players) or one player's
           entry { name=, items={ {id,link,count}, ... } }. Read-only by convention.
       engine:ClearOwed()                  wipe the ledger.
@@ -613,7 +613,7 @@ function Engine:_whisperOwedSoon(name)
     timerQueue[#timerQueue + 1] = t
 end
 
-function Engine:Forgive(player, itemId)
+function Engine:Forgive(player, itemId, count)
     local entry, key = self:_owedFor(player, false)
     if not entry then return false end
     if not itemId then
@@ -622,7 +622,12 @@ function Engine:Forgive(player, itemId)
     end
     local removed = false
     for i = #entry.items, 1, -1 do
-        if entry.items[i].id == itemId then table.remove(entry.items, i); removed = true end
+        local it = entry.items[i]
+        if it.id == itemId then
+            removed = true
+            if count and it.count > count then it.count = it.count - count
+            else table.remove(entry.items, i) end
+        end
     end
     if #entry.items == 0 then self.db.owed[key] = nil end
     return removed
