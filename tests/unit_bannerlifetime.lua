@@ -470,4 +470,17 @@ test("CloseAwardCard drops a card still queued before the banner plays, and clos
     check(not row.alive, "a shown card fades out")
 end)
 
+test("CloseRollBannerCard drops a roll card still queued before the banner plays", function()
+    local w = bannerWorld(true)
+    local drops = w.env.WeirdLootDropsBanner
+    local card = { key = "L:11", link = WON.link, icon = "x", quantity = 1, rollDuration = 30,
+        prio = "MS > OS", isOwner = true, onMLEnd = function() end }
+    w.addon:AddRollBannerItem(card)                 -- queued: no pump yet, like a restore right after a reload
+    w.addon:CloseRollBannerCard("L:11")
+    for _ = 1, 60 do F.pump(w, 0.001) end
+    local shown
+    for _, f in ipairs(drops.LootFrames) do if f.alive and f.rowKey == "L:11" then shown = f end end
+    check(not shown, "the queued roll card never appears")
+end)
+
 F.endSuite()

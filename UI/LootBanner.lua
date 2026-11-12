@@ -2444,6 +2444,11 @@ end
 function addon:CloseRollBannerCard(key)
     if not key then return end
     dropsBanner.seenKeys[key] = nil
+    -- not shown yet: right after a reload the banner queues cards until it plays
+    local queued = dropsBanner.pendingLoot
+    for i = #queued, 1, -1 do
+        if queued[i].key == key then table.remove(queued, i) end
+    end
     for _, f in ipairs(dropsBanner.LootFrames) do
         if f.alive and not f.fading and f.rowKey == key then
             f.rowKey = nil
