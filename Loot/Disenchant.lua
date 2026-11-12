@@ -46,8 +46,8 @@ end
 
 -- Raider: whisper the ML our Enchanting and free bag slots once per session, when we first sync it (a
 -- join, a late sync or a reload all land here). Professions do not change mid-raid, so nothing listens
--- for skill changes, and non-enchanters send nothing. again: an item just arrived from the ML, so re-send
--- the bag count (only once this session's report has gone out).
+-- for skill changes; non-enchanters send 0 with their bags. again: our free slots changed while we are a watched
+-- disenchanter, so re-send them (only once this session's report has gone out).
 function addon:ReportEnchanting(again)
     if self:IsAuthorizedLootMaster() then return end
     local ml = self:GetLootMasterName()
@@ -55,45 +55,55 @@ function addon:ReportEnchanting(again)
     if not ml or ml == "" or not session.active then return end
     if (session.id == self._enchSentEpoch) ~= (again and true or false) then return end
     self._enchSentEpoch = session.id
-    local rank = self:EnchantingSkill()
-    if rank > 0 then self:SendLargeMessage("ENCH", { rank, self:FreeBagSlots() }, "WHISPER", ml) end
+    -- everyone reports: the free slots let the ML hand greens to a holder when nobody can disenchant
+    self._bagsSent = self:FreeBagSlots()
+    self:SendLargeMessage("ENCH", { self:EnchantingSkill(), self._bagsSent }, "WHISPER", ml)
 end
 
--- Raider: a trade with the ML closing, or loot (green or better) landing in our bags, changes our free
--- slots; re-send them once the bags settle. Covers trades and the ML's corpse sends alike.
-local BAGS_SETTLE = 1.5
+-- Raider: while the ML has us down as a disenchanter (greens, or the flyout's remembered pick), re-send our
+-- free slots once the bags settle after any change: trades, corpse sends, trash loot, vendoring alike.
+-- Unchanged counts send nothing.
+local BAGS_SETTLE = 5
 local bagsTimer = CreateFrame("Frame")
 bagsTimer:Hide()
 bagsTimer:SetScript("OnUpdate", function()
     if not addon._bagsReportAt or GetTime() < addon._bagsReportAt then return end
     addon._bagsReportAt = nil
     bagsTimer:Hide()
-    addon:ReportEnchanting(true)
+    if addon:FreeBagSlots() ~= addon._bagsSent then addon:ReportEnchanting(true) end
 end)
 
-local LOOT_SELF_PREFIX = (LOOT_ITEM_SELF or "You receive loot: %s."):match("^(.-)%%s")
-function addon:DEBagEvent(event, msg)
-    if self:IsDisabled() or not self._enchSentEpoch then return end
-    local arm
-    if event == "TRADE_SHOW" then
-        self._tradeWithML = util:NormalizeKey(UnitName("NPC") or "") == util:NormalizeKey(self:GetLootMasterName() or "")
-    elseif event == "TRADE_CLOSED" then
-        arm, self._tradeWithML = self._tradeWithML, nil
-    elseif event == "CHAT_MSG_LOOT" and msg and LOOT_SELF_PREFIX and msg:find(LOOT_SELF_PREFIX, 1, true) == 1 then
-        local link = msg:match("|H(item:[^|]+)|h")
-        local _, _, quality = GetItemInfo(link or "")
-        arm = (quality or 0) >= 2
-    end
-    if arm then
-        self._bagsReportAt = GetTime() + BAGS_SETTLE
-        bagsTimer:Show()
-    end
+function addon:IsWatchedDisenchanter()
+    local w = self._deWatch
+    return w and w.id == self:GetCurrentSession().id and w.names[util:NormalizeKey(util:GetPlayerName("player") or "")] or false
 end
-local bagsEvents = CreateFrame("Frame")
-bagsEvents:RegisterEvent("TRADE_SHOW")
-bagsEvents:RegisterEvent("TRADE_CLOSED")
-bagsEvents:RegisterEvent("CHAT_MSG_LOOT")
-bagsEvents:SetScript("OnEvent", function(_, event, msg) addon:DEBagEvent(event, msg) end)
+
+-- BAG_UPDATE (Core.lua): a trailing 5 s deadline, pushed back by every further change.
+function addon:DEBagsChanged()
+    if not self._enchSentEpoch or not self:IsWatchedDisenchanter() then return end
+    self._bagsReportAt = GetTime() + BAGS_SETTLE
+    bagsTimer:Show()
+end
+
+-- Raider: the ML's current disenchanters for this session (fields: session id, then names).
+function addon:OnDEWatch(sender, fields)
+    if util:NormalizeKey(sender or "") ~= util:NormalizeKey(self:GetLootMasterName() or "") then return end
+    local names = {}
+    for i = 2, #fields do if fields[i] ~= "" then names[util:NormalizeKey(fields[i])] = true end end
+    self._deWatch = { id = fields[1], names = names }
+end
+
+-- ML: tell the raid who watches their bags (the greens disenchanter and the flyout's remembered pick), when
+-- that changes; to = one raider (whispered, e.g. a late joiner's first report).
+function addon:SendDEWatch(to)
+    if not self:IsAuthorizedLootMaster() then return end
+    local session = self:GetCurrentSession()
+    local a, b = session.deer or "", session.deDefault or ""
+    local key = tostring(session.id) .. "|" .. a .. "|" .. b
+    if not to and key == self._deWatchSent then return end
+    if not to then self._deWatchSent = key end
+    self:SendLargeMessage("DEWATCH", { session.id, a, b }, to and "WHISPER" or "RAID", to)
+end
 
 -- ML: a raider's report. Kept in the session (survives an ML reload); a new session gets fresh reports.
 -- free: their free bag slots (nil from an older WeirdLoot).
@@ -105,6 +115,9 @@ function addon:OnEnchantingReport(sender, rank, free)
     session.enchanting[key] = tonumber(rank) or 0
     session.deBags = session.deBags or {}
     session.deBags[key] = tonumber(free)
+    if util:NormalizeKey(session.deer or "") == key or util:NormalizeKey(session.deDefault or "") == key then
+        self:SendDEWatch(sender)   -- they may have joined or reloaded after the raid-wide one
+    end
     -- the greens prompt is open: a late report can add a name, or a new bag count, to it
     local f = self._greensPrompt
     if f and f:IsShown() then self:PromptGreensDisenchanter(f.itemId, f.link, f.gone) end
@@ -170,6 +183,37 @@ function addon:DisenchantCandidatesAt(need)
     return list, need
 end
 
+-- ML, when nobody can disenchant greens: online raiders (not us: Keep covers that) who reported room to hold
+-- them, most free first, the top HOLDERS_MAX with at least HOLDER_MIN free (fewer would fill almost at once).
+local HOLDERS_MAX, HOLDER_MIN = 5, 5
+function addon:GreensHolderCandidates()
+    local bags = self:GetCurrentSession().deBags or {}
+    local me = util:NormalizeKey(util:GetPlayerName("player") or "")
+    local list = {}
+    for i = 1, (GetNumRaidMembers() or 0) do
+        local name, _, _, _, className, _, _, online = GetRaidRosterInfo(i)
+        local key = name and util:NormalizeKey(name)
+        local free = key and bags[key]
+        if online and key ~= me and free and free >= HOLDER_MIN then
+            list[#list + 1] = { name = name, class = className, free = free }
+        end
+    end
+    table.sort(list, function(a, b)
+        if a.free ~= b.free then return a.free > b.free end
+        return a.name < b.name
+    end)
+    for i = #list, HOLDERS_MAX + 1, -1 do list[i] = nil end
+    return list
+end
+
+-- Can `who` disenchant greens (the Loot Master tab says "Disenchanter" or "Greens to")?
+function addon:CanDisenchantGreens(who)
+    local key = util:NormalizeKey(who or "")
+    local rank = (key == util:NormalizeKey(util:GetPlayerName("player") or "")) and self:EnchantingSkill()
+        or (self:GetCurrentSession().enchanting or {})[key] or 0
+    return rank >= GREEN_BASELINE
+end
+
 -- ML: send a no-winner copy to `who` to disenchant. The loot-council award does the work (owe and trade,
 -- or the corpse send for a copy still on the corpse); the flag marks the owe as for disenchanting.
 function addon:SendForDisenchant(lotId, who)
@@ -181,6 +225,7 @@ function addon:SendForDisenchant(lotId, who)
     -- which lots went out to disenchant: the corpse send, its delivery and raiders' cards read it
     session.deLots = session.deLots or {}
     session.deLots[lotId] = who
+    self:SendDEWatch()
     self._awardForDE = true
     self:AwardLootCouncilCopy(lotId, who, true)
     self._awardForDE = nil
@@ -196,8 +241,10 @@ function addon:SetGreensDisenchanter(who, quiet)
     session.deer = who
     session.deerSelf = nil
     if self._greensPrompt then self._greensPrompt:Hide() end
+    self:SendDEWatch()
     if not quiet then
-        self:Print(who and ("Greens go to " .. who .. " to disenchant this session.") or "Disenchanter cleared.")
+        self:Print(who and ("Greens go to " .. who .. (self:CanDisenchantGreens(who) and " to disenchant" or "")
+            .. " this session.") or "Disenchanter cleared.")
     end
     if self.ui and self.ui.masterPanel and self.RefreshMasterTab then self:RefreshMasterTab() end
 end
@@ -207,6 +254,7 @@ function addon:KeepGreensMyself()
     local session = self:GetCurrentSession()
     session.deer, session.deerSelf = nil, true
     if self._greensPrompt then self._greensPrompt:Hide() end
+    self:SendDEWatch()
     self:Print("Greens go to you this session.")
     if self.ui and self.ui.masterPanel and self.RefreshMasterTab then self:RefreshMasterTab() end
 end
@@ -276,7 +324,36 @@ function addon:PromptGreensDisenchanter(itemId, link, gone)
     local f = self._greensPrompt or buildGreensPrompt(self)
     self._greensPrompt = f
     -- always the green baseline: this picks who takes every green, not just the one that dropped
-    local cands, need = self:DisenchantCandidatesAt(GREEN_BASELINE)
+    local cands = self:DisenchantCandidatesAt(GREEN_BASELINE)
+    local lines = {}
+    if gone then lines[#lines + 1] = "|cffff8080" .. gone .. "|r" end
+    local noDE = #cands == 0
+    if noDE then
+        -- nobody can disenchant: offer whoever has room to hold the greens instead
+        cands = self:GreensHolderCandidates()
+        if #cands == 0 and self:FreeBagSlots() == 0 then
+            -- no one, us included, has room: nothing to choose, so no box; the greens stay in the corpse
+            f:Hide()
+            local session = self:GetCurrentSession()
+            if self._allFullSaid ~= session.id then
+                self._allFullSaid = session.id
+                self:Print("Everyone's bags are full: greens stay in the corpse.")
+            end
+            return
+        end
+        lines[#lines + 1] = "No one can disenchant greens."
+        if #cands > 0 then lines[#lines + 1] = "Send greens to:" end
+    end
+    -- with nobody to disenchant, the choice is only who holds them
+    f.title:SetText(noDE and "Who gets greens?" or "Who disenchants greens?")
+    local top, gap = f.title, -6
+    if #lines > 0 then
+        f.item:SetText(table.concat(lines, "\n"))
+        f.item:Show()
+        top = f.item
+    else
+        f.item:Hide()
+    end
     for i, c in ipairs(cands) do
         local b = f.rows[i]
         if not b then
@@ -287,8 +364,8 @@ function addon:PromptGreensDisenchanter(itemId, link, gone)
             f.rows[i] = b
         end
         b:ClearAllPoints()
-        -- no skill shown: only raiders who can disenchant greens are listed
-        b:SetPoint("TOP", f.title, "BOTTOM", -24, -6 - (i - 1) * ROW_H)
+        -- no skill shown: everyone listed can take greens
+        b:SetPoint("TOP", top, "BOTTOM", -24, gap - (i - 1) * ROW_H)
         b.free:SetText(self:FreeSlotsText(c.name))
         b:SetText(c.name)
         b.name = c.name
@@ -296,30 +373,9 @@ function addon:PromptGreensDisenchanter(itemId, link, gone)
         b:Show()
     end
     for i = #cands + 1, #f.rows do f.rows[i]:Hide() end
-    -- the setup is about who, not what dropped: the item line only explains an empty list
     f.keep:ClearAllPoints()
-    local h
-    if #cands > 0 and gone then
-        -- say why it is asking again, above the names
-        f.item:SetText("|cffff8080" .. gone .. "|r")
-        f.item:Show()
-        for i = 1, #cands do
-            f.rows[i]:ClearAllPoints()
-            f.rows[i]:SetPoint("TOP", f.item, "BOTTOM", -24, -6 - (i - 1) * ROW_H)
-        end
-        f.keep:SetPoint("TOP", f.item, "BOTTOM", -24, -10 - #cands * ROW_H)
-        h = 72 + (tonumber(f.item:GetStringHeight()) or 12) + #cands * ROW_H
-    elseif #cands > 0 then
-        f.item:Hide()
-        f.keep:SetPoint("TOP", f.title, "BOTTOM", -24, -10 - #cands * ROW_H)
-        h = 68 + #cands * ROW_H
-    else
-        f.item:SetText("No one in the raid can disenchant greens"
-            .. (need and (" (needs Enchanting " .. need .. ").") or "."))
-        f.item:Show()
-        f.keep:SetPoint("TOP", f.item, "BOTTOM", -24, -8)
-        h = 76 + (tonumber(f.item:GetStringHeight()) or 24)
-    end
+    f.keep:SetPoint("TOP", top, "BOTTOM", -24, gap - 4 - #cands * ROW_H)
+    local h = 68 + #cands * ROW_H + (#lines > 0 and ((tonumber(f.item:GetStringHeight()) or 12 * #lines) + 6) or 0)
     f.keep.free:SetText(self:FreeSlotsText(util:GetPlayerName("player")))
     f:SetHeight(h)   -- includes padding under Keep, clear of the border
     f.itemId, f.link, f.gone = itemId, link, gone
@@ -338,6 +394,7 @@ function addon:UI_ERROR_MESSAGE(msg)
     self:Print((who or "The disenchanter") .. "'s bags are full: the greens stay in the corpse. Choose who takes greens.")
     local session = self:GetCurrentSession()
     session.deer, session.deerSelf = nil, nil   -- greens wait in the corpse for a new choice (Keep included)
+    self:SendDEWatch()
     if who then
         session.deBags = session.deBags or {}
         session.deBags[util:NormalizeKey(who)] = 0

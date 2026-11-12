@@ -698,6 +698,8 @@ function addon:HandleCommMessage(sender, value)
             return
         end
         self:SetPlayerResponse(fields[2], fields[3], fields[4]) -- ML core write; snapshot syncs back
+    elseif command == "DEWATCH" then
+        self:OnDEWatch(sender, fields)   -- the ML's current disenchanters: watch our bags (Disenchant.lua)
     elseif command == "ENCH" then
         self:OnEnchantingReport(sender, fields[1], fields[2])   -- raider's Enchanting and free bag slots (Disenchant.lua)
     elseif command == "NAMED_ITEMS_SYNC" then

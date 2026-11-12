@@ -263,7 +263,8 @@ function addon:RefreshMasterTab()
     local session = self:GetCurrentSession()
     local deerText = session.deer and ("|cfff58cba" .. session.deer .. "|r")
         or (session.deerSelf and util:ColorPlayerName(util:GetPlayerName("player"))) or "|cff9a9384not chosen yet (asked on the first green)|r"
-    panel.deerLabel:SetText("|cffffd200Disenchanter:|r " .. deerText)
+    local holder = session.deer and not self:CanDisenchantGreens(session.deer)
+    panel.deerLabel:SetText("|cffffd200" .. (holder and "Greens to:" or "Disenchanter:") .. "|r " .. deerText)
     if authorized and session.active then panel.deerButton:Enable() else panel.deerButton:Disable() end
 
     if self:CanEditRoster() then

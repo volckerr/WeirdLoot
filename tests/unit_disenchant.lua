@@ -84,13 +84,16 @@ test("raider report: whispered to the ML once per session; the ML keeps it", fun
     eq(sent, 1, "a new session hears it again")
 end)
 
-test("a non-enchanter sends nothing", function()
+test("a non-enchanter reports 0 with its free slots", function()
     F.clearWire()
     local ml = F.makeWorld("Masterlooter", true)
     local raider = F.makeWorld("Raidertwo", false)
+    raider.env.__bags = { [0] = { size = 16 } }
     F.startSession(ml)
     F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
-    for _, m in ipairs(F.WIRE) do check(not (m.value and m.value[1] == "ENCH"), "no ENCH from a non-enchanter") end
+    F.flushWireTo(ml)
+    eq(ml.addon:GetCurrentSession().enchanting["raidertwo"], 0, "Enchanting 0")
+    eq(ml.addon:DisenchanterFreeSlots("Raidertwo"), 16, "free slots known")
 end)
 
 test("candidates: raid members whose skill is enough, highest first, the ML read directly", function()
@@ -303,7 +306,8 @@ test("greens prompt: nobody can disenchant it -> says so, Keep only", function()
     w.addon.RouteLootSlots = function() end
     w.addon:PromptGreensDisenchanter(36486, "[Ornate Pugio]")
     local f = w.addon._greensPrompt
-    check((f.item.__text or ""):find("needs Enchanting 350", 1, true) ~= nil, "names the skill: " .. tostring(f.item.__text))
+    eq(f.item.__text, "No one can disenchant greens.", "says so")
+    eq(f.title.__text, "Who gets greens?", "the title asks who gets them")
     f.keep:GetScript("OnClick")(f.keep)
     check(w.addon:GetCurrentSession().deerSelf, "Keep: greens go to the ML")
 end)
@@ -393,7 +397,7 @@ test("bags: the report carries free slots; the ML shows them coloured", function
     check(ml.addon:FreeSlotsText("Nobody"):find("-"), "unreported shows -")
 end)
 
-test("bags: a trade with the ML re-sends; a trade with anyone else does not", function()
+local function watchWorld()
     F.clearWire()
     local ml = F.makeWorld("Masterlooter", true)
     local raider = F.makeWorld("Raidertwo", false)
@@ -401,53 +405,127 @@ test("bags: a trade with the ML re-sends; a trade with anyone else does not", fu
     raider.env.__bags = { [0] = { size = 16 } }
     F.startSession(ml)
     F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
-    F.clearWire()
-    F.setPartner(raider, "Someoneelse")
-    raider.addon:DEBagEvent("TRADE_SHOW"); raider.addon:DEBagEvent("TRADE_CLOSED")
-    F.advanceClock(2); F.pump(raider)
-    eq(#enchSends(), 0, "not the ML: nothing")
-    F.setPartner(raider, "Masterlooter")
-    raider.addon:DEBagEvent("TRADE_SHOW")
-    raider.env.__bags[0][1] = { id = 9 }
-    raider.addon:DEBagEvent("TRADE_CLOSED")
-    F.pump(raider)
-    eq(#enchSends(), 0, "waits for the bags to settle")
-    F.advanceClock(2); F.pump(raider)
-    eq(#enchSends(), 1, "re-sent after the trade")
     F.flushWireTo(ml)
-    eq(ml.addon:DisenchanterFreeSlots("Raidertwo"), 15, "the ML has the new count")
+    F.clearWire()
+    return ml, raider
+end
+
+local function bagChange(raider) raider.addon:BAG_UPDATE() end
+
+test("bag watch: not picked -> bag changes send nothing", function()
+    local ml, raider = watchWorld()
+    raider.env.__bags[0][1] = { id = 9 }; bagChange(raider)
+    F.advanceClock(6); F.pump(raider)
+    eq(#enchSends(), 0, "nothing")
 end)
 
-test("bags: loot of green or better re-sends; grey loot and other people's loot do not", function()
+test("bag watch: the greens disenchanter re-sends 5 s after the bags settle, once, only on a change", function()
+    local ml, raider = watchWorld()
+    ml.addon:SetGreensDisenchanter("Raidertwo", true)
+    F.flushWireTo(raider)
+    check(raider.addon:IsWatchedDisenchanter(), "told it is watched")
+    F.clearWire()
+    raider.env.__bags[0][1] = { id = 9 }; bagChange(raider)
+    F.advanceClock(3); F.pump(raider)
+    raider.env.__bags[0][2] = { id = 9 }; bagChange(raider)   -- a second change pushes the deadline back
+    F.advanceClock(3); F.pump(raider)
+    eq(#enchSends(), 0, "still settling")
+    F.advanceClock(3); F.pump(raider)
+    eq(#enchSends(), 1, "one report after the bags went quiet")
+    F.flushWireTo(ml)
+    eq(ml.addon:DisenchanterFreeSlots("Raidertwo"), 14, "the ML has the new count")
+    F.clearWire()
+    bagChange(raider)                                          -- a change event with the same count
+    F.advanceClock(6); F.pump(raider)
+    eq(#enchSends(), 0, "unchanged count: nothing sent")
+end)
+
+test("bag watch: the flyout's remembered pick is watched too; a new pick or session ends it", function()
+    local ml, raider = watchWorld()
+    ml.addon:GetCurrentSession().deDefault = "Raidertwo"
+    ml.addon:SendDEWatch()
+    F.flushWireTo(raider)
+    check(raider.addon:IsWatchedDisenchanter(), "remembered epic pick: watched")
+    F.clearWire()
+    ml.addon:SetGreensDisenchanter("Someoneelse", true)        -- epic pick unchanged: still watched
+    F.flushWireTo(raider)
+    check(raider.addon:IsWatchedDisenchanter(), "still the epic pick")
+    ml.addon:GetCurrentSession().deDefault = "Someoneelse"
+    ml.addon:SendDEWatch()
+    F.flushWireTo(raider)
+    check(not raider.addon:IsWatchedDisenchanter(), "no longer picked")
+    ml.addon:SetGreensDisenchanter("Raidertwo", true)
+    F.flushWireTo(raider)
+    F.startSession(ml)
+    F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
+    check(not raider.addon:IsWatchedDisenchanter(), "a new session drops the old watch")
+end)
+
+test("bag watch: a watched raider who reloaded is told again on its report", function()
+    local ml, raider = watchWorld()
+    ml.addon:SetGreensDisenchanter("Raidertwo", true)
+    raider.addon._deWatch, raider.addon._enchSentEpoch = nil, nil   -- the reload
+    F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
+    F.flushWireTo(ml)
+    F.flushWireTo(raider)
+    check(raider.addon:IsWatchedDisenchanter(), "watched again after the report")
+end)
+
+test("bag watch: a holder (no Enchanting) is watched like a disenchanter", function()
     F.clearWire()
     local ml = F.makeWorld("Masterlooter", true)
     local raider = F.makeWorld("Raidertwo", false)
-    raider.env.__skills = { { "Enchanting", false, 450 } }
     raider.env.__bags = { [0] = { size = 16 } }
     F.startSession(ml)
     F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
+    ml.addon:SetGreensDisenchanter("Raidertwo", true); F.flushWireTo(raider)
     F.clearWire()
-    itemAs(raider, 0, 1, "Junk")
-    raider.addon:DEBagEvent("CHAT_MSG_LOOT", "You receive loot: |cff9d9d9d|Hitem:36486:0:0:0:0:0:0:0:80|h[Junk]|h|r.")
-    raider.addon:DEBagEvent("CHAT_MSG_LOOT", "Halricb receives loot: |cff1eff00|Hitem:36486:0:0:0:0:0:0:0:80|h[Pugio]|h|r.")
-    F.advanceClock(2); F.pump(raider)
-    eq(#enchSends(), 0, "grey, or someone else's loot: nothing")
-    itemAs(raider, 2, 182, "Weapon")
-    raider.addon:DEBagEvent("CHAT_MSG_LOOT", "You receive loot: |cff1eff00|Hitem:36486:0:0:0:0:0:0:0:80|h[Pugio]|h|r.")
-    F.advanceClock(2); F.pump(raider)
-    eq(#enchSends(), 1, "a green from the ML: re-sent")
+    raider.env.__bags[0][1] = { id = 9 }; bagChange(raider)
+    F.advanceClock(6); F.pump(raider)
+    eq(#enchSends(), 1, "re-sent")
 end)
 
-test("bags: a non-enchanter never re-sends", function()
-    F.clearWire()
-    local ml = F.makeWorld("Masterlooter", true)
-    local raider = F.makeWorld("Raidertwo", false)
-    F.startSession(ml)
-    F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
-    F.setPartner(raider, "Masterlooter")
-    raider.addon:DEBagEvent("TRADE_SHOW"); raider.addon:DEBagEvent("TRADE_CLOSED")
-    F.advanceClock(2); F.pump(raider)
-    eq(#enchSends(), 0, "nothing")
+local function holderRaid(w, bags)
+    roster(w, { { "Masterlooter", "Warrior" }, { "Aa", "Mage" }, { "Bb", "Priest" }, { "Cc", "Rogue" },
+        { "Dd", "Druid" }, { "Ee", "Shaman" }, { "Ff", "Hunter" }, { "Gg", "Paladin", false } })
+    local s = w.addon:GetCurrentSession()
+    s.enchanting, s.deBags = {}, bags
+end
+
+test("holders: nobody can disenchant -> the most free first, 5 or more free, online, top 5, not the ML", function()
+    local w = F.makeWorld("Masterlooter", true)
+    F.startSession(w)
+    holderRaid(w, { aa = 10, bb = 40, cc = 4, dd = 20, ee = 30, ff = 50, gg = 99, masterlooter = 90 })
+    local list = w.addon:GreensHolderCandidates()
+    local names = {}
+    for _, c in ipairs(list) do names[#names + 1] = c.name end
+    eq(table.concat(names, ","), "Ff,Bb,Ee,Dd,Aa", "sorted by free; Cc under 5, Gg offline, ML left out")
+end)
+
+test("holders: the box lists them under 'Send greens to:'; a pick says 'Greens to' on the Master tab", function()
+    local w = F.makeWorld("Masterlooter", true)
+    F.startSession(w)
+    holderRaid(w, { bb = 40 })
+    w.addon:PromptGreensDisenchanter()
+    local f = w.addon._greensPrompt
+    check(f and f:IsShown(), "box shown")
+    check(f.rows[1] and f.rows[1]:IsShown() and f.rows[1].name == "Bb", "Bb offered as holder")
+    check(not w.addon:CanDisenchantGreens("Bb"), "Bb cannot disenchant")
+end)
+
+test("holders: nobody has room, the ML included -> no box, one chat line per session", function()
+    local w = F.makeWorld("Masterlooter", true)
+    F.startSession(w)
+    holderRaid(w, { bb = 0 })
+    w.env.__bags = { [0] = { size = 1, [1] = { id = 9 } } }
+    local said = 0
+    local orig = w.addon.Print
+    w.addon.Print = function(self, msg) if tostring(msg):find("Everyone's bags are full", 1, true) then said = said + 1 end end
+    w.addon:PromptGreensDisenchanter()
+    w.addon:PromptGreensDisenchanter()
+    w.addon.Print = orig
+    check(not (w.addon._greensPrompt and w.addon._greensPrompt:IsShown()), "no box")
+    eq(said, 1, "said once")
 end)
 
 F.endSuite()

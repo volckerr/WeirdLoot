@@ -575,6 +575,7 @@ function addon:BAG_UPDATE()
     self:ScheduleBagReconcile()
     -- loan borrower: the loaned item just landing in our bags is the fulfillment signal
     if self.MaybeFulfillLoanPickup then self:MaybeFulfillLoanPickup() end
+    if self.DEBagsChanged then self:DEBagsChanged() end   -- a watched disenchanter re-sends free slots
 end
 
 function addon:PLAYER_REGEN_ENABLED()
