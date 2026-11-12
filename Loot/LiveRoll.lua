@@ -361,6 +361,36 @@ function addon:RestoreOwnerRolls()
     end
 end
 
+-- Loot master moved (handoff or loan): an open roll's record still has the old side's controls. The new
+-- ML's raider record has no End/Cancel and no auto-end, so the roll could never close; the old ML keeps
+-- End/Cancel it may no longer use. Rebuild each live roll for our side with the time it had left.
+function addon:RebindRollOwnership(isML)
+    if not (self.live and self.live.rolls) then return end
+    local core = self.lootCore
+    local now = GetTime()
+    local moved = {}
+    for id, roll in pairs(self.live.rolls) do
+        local lot = core and core:Get(id)
+        if not roll.resolved and (roll.owner and true or false) ~= (isML and true or false)
+            and lot and lot.state == core.STATE.ROLLING then
+            moved[id] = math.max(0, (roll.deadline or now) - now)
+        end
+    end
+    if not next(moved) then return end
+    self:DropStaleLiveRolls(function(id) return moved[id] == nil end)
+    if isML then
+        local ends = sessionRollEnds(self)
+        for id, left in pairs(moved) do ends[id] = time() + left end
+        self:RestoreOwnerRolls()
+    else
+        self._rollRemaining = self._rollRemaining or {}
+        for id, left in pairs(moved) do
+            self._rollRemaining[id] = left
+            self:RestoreRollPopup(core:Get(id))
+        end
+    end
+end
+
 function addon:HasOpenPendingForLot(lotId)
     for _, f in ipairs(self.live.active) do
         if f.mode == "pending" and f.lotId == lotId then return true end

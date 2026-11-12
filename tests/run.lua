@@ -3679,6 +3679,35 @@ test("ml-prompt: the loot method leaving master and coming back (Mimiron) does n
     eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "a later handoff and back still asks")
 end)
 
+test("handoff mid-roll: the new ML owns the open roll with its time left, the old ML gets a raider card", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local promotee = makeWorld("Promotee", false)
+    startSession(ml)
+    setBag(ml, 40005, 1); bagUpdate(ml)
+    local lot = openLot(ml, 40005)
+    ml.addon:StartLiveRoll(lot.id)
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(promotee)
+    local mirrored = promotee.addon.live.rolls[lot.id]
+    check(mirrored and not mirrored.owner, "the promotee holds a raider roll")
+    F.advanceClock(10)
+    local left = math.floor(mirrored.deadline - promotee.env.GetTime() + 0.5)
+
+    engageML(promotee)
+    local r = promotee.addon.live.rolls[lot.id]
+    check(r and r.owner, "the new ML now owns the roll (End/Cancel, auto-end)")
+    eq(math.floor(r.deadline - promotee.env.GetTime() + 0.5), left, "with the time it had left")
+
+    local before = ml.addon.live.rolls[lot.id]
+    check(before and before.owner, "the old ML held the owner roll")
+    ml.env.GetLootMethod = function() return "master", 0, 2 end   -- master loot moved to raid2
+    ml.env.GetRaidRosterInfo = function(i) return (i == 2) and "Promotee" or "Masterlooter", 0 end
+    ml.addon:RefreshLootAuthority()
+    eq(ml.addon:IsAuthorizedLootMaster(), false, "the old ML lost authority")
+    local after = ml.addon.live.rolls[lot.id]
+    check(after and not after.owner, "and its card is a raider card now")
+end)
+
 test("handoff: once a mirror has taken over, a loot-method round trip keeps its epoch", function()
     local w = makeWorld("Promotee", false)
     leftover(w)

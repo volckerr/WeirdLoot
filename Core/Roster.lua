@@ -359,6 +359,8 @@ function addon:RefreshLootAuthority()
     -- out-rank us). Only a false->true transition fires it, so the event/retry re-runs do not re-mint.
     if isLootMaster and not wasLootMaster then
         self:AssumeLootMasterSession()
+        -- a handoff mid-roll: the open rolls we mirrored as a raider become ours to end
+        if self.RebindRollOwnership then self:RebindRollOwnership(true) end
         -- a reload/relog (or a Keep on the fresh-session prompt) mid-roll: take back the rolls the
         -- ledger still has ROLLING, with their recorded end
         if self.RestoreOwnerRolls then self:RestoreOwnerRolls() end
@@ -369,6 +371,9 @@ function addon:RefreshLootAuthority()
         if self.RequestGuildNotes then
             self:RequestGuildNotes()
         end
+    elseif wasLootMaster and not isLootMaster then
+        -- handed off mid-roll: our open rolls go back to plain raider cards
+        if self.RebindRollOwnership then self:RebindRollOwnership(false) end
     end
 
     -- A raider that just learned (or changed) who the loot master is -- e.g. the raid roster finally
