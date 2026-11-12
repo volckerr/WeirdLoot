@@ -518,6 +518,12 @@ function addon:AnswerFreshSessionOnML(fresh)
         self:RecheckLootAuthority()
     end
     self._mlPromptAnswering = nil
+    -- greens waited in the corpse for this answer: ask now (a fresh session has no old disenchanter to name)
+    local ask = self._greensAskPending
+    self._greensAskPending = nil
+    if ask and self.PromptGreensDisenchanter then
+        self:PromptGreensDisenchanter(ask[1], ask[2], not fresh and ask[3] or nil)
+    end
 end
 
 -- Everything keyed by the old ledger's lot ids goes with it: rolls, popups, win cards, queued roll
@@ -528,6 +534,10 @@ local function dropLedgerState(self)
     if self.DropStaleAwardCards then self:DropStaleAwardCards() end
     self._rollBatch = nil
     self.session.rollEnds = {}
+    self.session.deLots = {}
+    -- the disenchanter is per session: the next session's first green asks again
+    self.session.deer, self.session.deerSelf, self.session.deDefault = nil, nil, nil
+    if self._greensPrompt then self._greensPrompt:Hide() end
 end
 
 function addon:StartLootSession()
@@ -1036,6 +1046,7 @@ function addon:UnlockSessionRoll(lotId)
         return false
     end
     self:RetractRollForReroll(lotId)
+    if self.session.deLots then self.session.deLots[lotId] = nil end
     self:TriggerCallback("RESULTS_UPDATED")
     self:Print("Unlocked for reroll.")
     return true

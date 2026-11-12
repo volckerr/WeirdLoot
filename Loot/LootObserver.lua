@@ -205,6 +205,22 @@ function addon:OnUniqueBlockedSlot(slot, itemId, link)
     if self._lootObsSeen[seenKey] then return end
     self._lootObsSeen[seenKey] = true
 
+    -- The seen mark is memory only: after a reload, re-opening the corpse would mint the same copy again.
+    -- A phantom of this item not yet handed out (open, rolling, or owed off the corpse) is that copy.
+    -- ponytail: two corpses each holding this same Unique at once would share one lot; key by corpse if seen.
+    local core = self.lootCore
+    if core then
+        for _, lot in ipairs(core:All()) do
+            if lot.phantom and lot.itemId == itemId and not lot.removed then
+                local live = lot.state ~= core.STATE.RESOLVED
+                for _, a in ipairs(lot.awards or {}) do
+                    if a.state == core.AWARD.OWED then live = true end
+                end
+                if live then return end
+            end
+        end
+    end
+
     local shown = link or ("item " .. itemId)
     self:LootAlert(shown .. " is a Unique you already hold: it CANNOT enter your bags and stays on the corpse. It rolls now; re-open the corpse afterwards to send it to the winner.")
     if self.lootCore then
@@ -372,7 +388,9 @@ function addon:OnPhantomSendCleared(lotId, target)
 
     local _, link = util:ItemRender(lot and lot.itemId)
     local shown = link or "your item"
-    whisperChat(target, "You won " .. shown .. "! It was master-looted directly to you.")
+    if not (self.DisenchantTarget and self:DisenchantTarget(lotId)) then
+        whisperChat(target, "You won " .. shown .. "! It was master-looted directly to you.")
+    end
     self:Print(shown .. " sent to " .. target .. " (master-looted from the corpse).")
     if self.ShowPhantomSendCard then self:ShowPhantomSendCard(lotId) end
     if self.RefreshRollsLeftBanner then self:RefreshRollsLeftBanner() end   -- on-corpse header may clear now

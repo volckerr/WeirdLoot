@@ -179,10 +179,14 @@ local function itemDisplay(it) return it.link or ("item:" .. tostring(it.id)) en
 
 -- format an owed entry's items as a link list for a whisper, capped to fit the
 -- 255-char chat limit (item hyperlinks are long): "[Foo] x2, [Bar], +3 more"
-local function listOwed(entry, maxLen)
+local function listOwed(entry, maxLen, de)
     maxLen = maxLen or 200
-    local parts, used, shown = {}, 0, 0
+    local items = {}
     for _, it in ipairs(entry.items) do
+        if de == nil or (it.de and true or false) == de then items[#items + 1] = it end
+    end
+    local parts, used, shown = {}, 0, 0
+    for _, it in ipairs(items) do
         local label = ((it.count or 1) > 1 and ((it.count) .. "x ") or "") .. itemDisplay(it)
         if shown > 0 and used + #label + 2 > maxLen then break end
         parts[#parts + 1] = label
@@ -190,7 +194,7 @@ local function listOwed(entry, maxLen)
         shown = shown + 1
     end
     local s = table.concat(parts, ", ")
-    local extra = #entry.items - shown
+    local extra = #items - shown
     if extra > 0 then s = s .. (", +%d more"):format(extra) end
     return s
 end
@@ -576,35 +580,42 @@ function Engine:_owedFor(name, create)
     return self.db.owed[key], key
 end
 
-function Engine:Owe(player, itemId, count, link)
+-- de: the copy goes to this player to disenchant (its own line in the whisper, and a longer wait).
+function Engine:Owe(player, itemId, count, link, de)
     count = count or 1
+    de = de and true or nil
     local entry = self:_owedFor(player, true)
     if not entry then return 0 end
     local found
     for _, it in ipairs(entry.items) do
-        if it.id == itemId then found = it break end
+        if it.id == itemId and it.de == de then found = it break end
     end
     if found then
         found.count = found.count + count
         found.link = found.link or link
     else
-        found = { id = itemId, link = link, count = count }
+        found = { id = itemId, link = link, count = count, de = de }
         entry.items[#entry.items + 1] = found
     end
-    if self.payoutActive then self:_whisperOwedSoon(entry.name) end
+    if self.payoutActive then self:_whisperOwedSoon(entry.name, de) end
     return found.count
 end
 
 -- Wins from one boss land seconds apart (rolls end together or one by one), so the come-trade
 -- whisper waits until no new win arrives for OWE_WHISPER_DELAY and then lists everything owed in
 -- one line, instead of one whisper per item.
-local OWE_WHISPER_DELAY = 2
-function Engine:_whisperOwedSoon(name)
+-- Disenchant sends wait longer: the ML works through several no-winner drops one by one.
+local OWE_WHISPER_DELAY, DE_WHISPER_DELAY = 2, 10
+function Engine:_whisperOwedSoon(name, de)
     self._oweTimers = self._oweTimers or {}
     local key = name:lower()
     local t = self._oweTimers[key]
-    if t then t.left = OWE_WHISPER_DELAY return end
-    t = { left = OWE_WHISPER_DELAY }
+    if t then
+        t.de = t.de or de
+        t.left = t.de and DE_WHISPER_DELAY or OWE_WHISPER_DELAY
+        return
+    end
+    t = { de = de, left = de and DE_WHISPER_DELAY or OWE_WHISPER_DELAY }
     t.fn = function()
         self._oweTimers[key] = nil
         if self.payoutActive then self:WhisperOwed(name) end
@@ -649,7 +660,12 @@ function Engine:WhisperOwed(onlyName)
     local sent = 0
     for key, entry in pairs(self.db.owed) do
         if (#entry.items > 0) and (not onlyName or key == onlyName:lower()) then
-            self:_whisper(entry.name, "Open a trade with me to collect: " .. listOwed(entry) .. ".")
+            local won, de = listOwed(entry, nil, false), listOwed(entry, nil, true)
+            local msg
+            if de == "" then msg = "Open a trade with me to collect: " .. won .. "."
+            elseif won == "" then msg = "Open a trade with me to collect " .. de .. " to disenchant."
+            else msg = "Open a trade with me to collect: " .. won .. ". To disenchant: " .. de .. "." end
+            self:_whisper(entry.name, msg)
             sent = sent + 1
         end
     end

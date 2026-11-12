@@ -46,6 +46,7 @@ Loot\LiveRoll.lua
 Loot\AutoLoot.lua
 Loot\LootObserver.lua
 Loot\MLLoan.lua
+Loot\Disenchant.lua
 
 Trade\TradeDeliver.lua
 Trade\Payout.lua

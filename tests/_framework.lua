@@ -174,6 +174,8 @@ function self.makeWorld(playerName, isML, globals)
                 return function(s) s.__disabled = true; return s end
             elseif k == "IsEnabled" then
                 return function(s) if s.__disabled then return 0 end return 1 end   -- 3.3.5: 1/0, not a boolean
+            elseif k == "GetButtonState" then
+                return function(s) return s.__disabled and "DISABLED" or "NORMAL" end
             elseif k == "Click" then
                 -- as the client: a disabled button ignores Click, an enabled one runs its OnClick
                 return function(s) if not s.__disabled and s.__scripts.OnClick then s.__scripts.OnClick(s) end return s end
@@ -330,6 +332,16 @@ function self.makeWorld(playerName, isML, globals)
         -- name, link, quality, ilvl, reqLevel, class, subclass, stack, equipLoc, texture, sell
         return name, self.linkFor(id), 4, 200, 80, t and t[1] or "Armor", t and t[2] or "Cloth", 1, "INVTYPE_SHOULDER", "Interface\\Icons\\inv_test", 0
     end
+    env.GetAuctionItemClasses = function() return "Weapon", "Armor", "Container", "Consumable" end
+    -- skill lines: __skills = { { name, isHeader, rank } }; GetSpellInfo(7411) names Enchanting
+    env.__skills = {}
+    env.GetNumSkillLines = function() return #env.__skills end
+    env.GetSkillLineInfo = function(i)
+        local s = env.__skills[i]
+        if not s then return nil end
+        return s[1], s[2] and 1 or nil, nil, s[3]
+    end
+    env.GetSpellInfo = env.GetSpellInfo or function(id) if id == 7411 then return "Enchanting" end end
     -- GetItemCount mirrors the 3.3.5a client (in-game verified): bags + equipped gear/bags +
     -- keyring always; includeBank=true adds the bank. __bank is GetItemCount-only, matching the
     -- real client where bank contents are not reachable through the container APIs remotely.
@@ -565,7 +577,7 @@ self.ADDON_FILES = {
     "Data/BlacklistPresets/Paladin.lua", "Data/BlacklistPresets/Warlock.lua",
     "Data/ItemInfo.lua", "Data/LootPrios.lua",
     "Loot/LootCore.lua", "Loot/Resolver.lua", "Loot/Session.lua", "Loot/LiveRoll.lua", "Loot/AutoLoot.lua",
-    "Loot/LootObserver.lua", "Loot/MLLoan.lua",
+    "Loot/LootObserver.lua", "Loot/MLLoan.lua", "Loot/Disenchant.lua",
     "Trade/TradeDeliver.lua", "Trade/Payout.lua",
     "UI/Popups.lua",
 }

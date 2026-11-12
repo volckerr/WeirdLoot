@@ -96,7 +96,7 @@ function addon:OnLotAwardedPayout(lot, award)
     local selfKey = addon.util:NormalizeKey(addon.util:GetPlayerName("player") or "")
     if addon.util:NormalizeKey(award.winner or "") == selfKey then return end
     local _, link = addon.util:ItemRender(lot.itemId)
-    self.payout:Owe(award.winner, lot.itemId, 1, link)
+    self.payout:Owe(award.winner, lot.itemId, 1, link, self._awardForDE)   -- SendForDisenchant
 end
 
 function addon:OnLotUnlockedPayout(lot, winners)

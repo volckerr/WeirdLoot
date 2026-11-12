@@ -203,6 +203,23 @@ H.test("blocked unique: self-assign skipped, phantom minted, warned once per cor
     H.eq(#lotsFor(w, UNIQUE_ID), 1, "no duplicate phantom on re-open")
 end)
 
+H.test("blocked unique: a reload and re-open does not mint the copy again", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    captureAlerts(w)
+    w.addon.PlayerHoldsItem = function(self, id) return id == UNIQUE_ID end
+    w.addon.IsItemPureUnique = function(self, id) return id == UNIQUE_ID end
+    mockLootWindow(w, { { itemId = UNIQUE_ID, bind = "bop" } }, OTHER_GUID, { "Masterlooter" })
+    w.addon:LOOT_OPENED()
+    local lot = w.addon.lootCore:openPhantomLotForItem(UNIQUE_ID)
+    w.addon:StartLiveRoll(lot.id)                  -- rolling when the ML reloads
+    w.addon._lootObsSeen = {}                      -- a /reload: the seen marks are gone
+    w.addon:LOOT_OPENED()
+    local n = 0
+    for _, l in ipairs(w.addon.lootCore:All()) do if l.itemId == UNIQUE_ID and l.phantom then n = n + 1 end end
+    H.eq(n, 1, "still one phantom for the copy on the corpse")
+end)
+
 H.test("unblocked BoP still self-assigns (the skip is unique-specific)", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
@@ -317,13 +334,99 @@ end)
 H.test("autoloot: a raid-banked unbound item (Runed Orb) goes to the ML; other unbound loot is left", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
-    w.addon.db.deer = "Deer"
+    w.addon:GetCurrentSession().deer = "Deer"
     local given = mockLootWindow(w, { { itemId = 45087, bind = nil, quality = 3 }, { itemId = 50003, bind = "boe", quality = 3 }, { itemId = 50004, bind = nil, quality = 3 } },
         OTHER_GUID, { "Masterlooter", "Deer" }, "Kologarn")
     w.addon:LOOT_OPENED()
     H.eq(#given, 2, "both BoE slots routed")
     H.eq(given[1].idx, 1, "Runed Orb -> ML")
     H.eq(given[2].idx, 2, "other rare BoE -> disenchanter")
+end)
+
+H.test("greens: the first green of a session asks who disenchants, and waits in the corpse", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked
+    w.addon.PromptGreensDisenchanter = function(self, itemId) asked = itemId end
+    local given = mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 }, { itemId = 50003, bind = "boe", quality = 3 } },
+        OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(asked, 36486, "the prompt names the green")
+    H.eq(#given, 0, "the green waits; a blue with no disenchanter stays too")
+    w.addon:SetGreensDisenchanter("Halricb", true)
+    w.addon:RouteLootSlots()
+    H.eq(#given, 2, "the pick routes both at once")
+    H.eq(given[1].idx, 2, "green -> Halricb")
+    H.eq(w.addon:DisenchantDefault({ { name = "Halricb" } }), "Halricb", "and the flyout's starting suggestion")
+    asked = nil
+    w.addon:LOOT_OPENED()
+    H.eq(asked, nil, "later greens this session: no prompt")
+end)
+
+H.test("greens: Keep greens myself sends them to the ML; a new session asks again", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked = 0
+    w.addon.PromptGreensDisenchanter = function() asked = asked + 1 end
+    local given = mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    w.addon:KeepGreensMyself()
+    w.addon:RouteLootSlots()
+    H.eq(given[1] and given[1].idx, 1, "green -> the ML")
+    w.addon:LOOT_OPENED()
+    H.eq(asked, 1, "no second prompt this session")
+    startSession(w)
+    w.addon:LOOT_OPENED()
+    H.eq(asked, 2, "a new session asks again")
+end)
+
+H.test("greens: a pick on the Disenchant flyout does not change the greens disenchanter", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    F.setBag(w, 40005, 1); F.bagUpdate(w)
+    local lot = F.openLot(w, 40005)
+    w.addon:StartLiveRoll(lot.id); w.addon:ResolveLiveRoll(lot.id)
+    w.addon:SetGreensDisenchanter("Dravekc", true)
+    w.addon:SendForDisenchant(lot.id, "Halricb")
+    H.eq(w.addon:GetCurrentSession().deer, "Dravekc", "greens still go to Dravekc")
+    H.eq(w.addon:DisenchantDefault({ { name = "Dravekc" }, { name = "Halricb" } }), "Halricb", "the flyout remembers Halricb")
+end)
+
+H.test("greens: the chosen disenchanter is not a loot candidate (offline) -> ask again, greens wait", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local gone
+    w.addon.PromptGreensDisenchanter = function(self, itemId, link, who) gone = who end
+    w.addon:SetGreensDisenchanter("Dravekc", true)
+    local given = mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 }, { itemId = 50003, bind = "boe", quality = 3 } },
+        OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(gone, "Dravekc can't take loot.", "asked again, naming who is missing")
+    H.eq(#given, 0, "green and blue wait for the answer")
+end)
+
+H.test("greens: a blue with nobody chosen goes to the ML, not left in the corpse", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    w.addon.PromptGreensDisenchanter = function() end
+    local given = mockLootWindow(w, { { itemId = 50003, bind = "boe", quality = 3 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(given[1] and given[1].idx, 1, "blue -> the ML")
+end)
+
+H.test("greens: the disenchanter's bags are full -> told, and asked who takes greens", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked
+    w.addon.PromptGreensDisenchanter = function(self, itemId, link, who) asked = who or true end
+    w.addon:SetGreensDisenchanter("Halricb", true)
+    mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    H.eq(asked, "Halricb's bags are full.", "asked again, naming Halricb")
+    H.eq(w.addon:GetCurrentSession().deer, nil, "greens wait for a new choice")
+    H.eq(w.addon:DisenchanterFreeSlots("Halricb"), 0, "the box shows Halricb at 0 free")
 end)
 
 -- Fragment of Val'anyr is BoP legendary, so every branch below would otherwise route it to the ML.

@@ -163,6 +163,40 @@ function addon:RefreshAll()
     self:TriggerCallback("STATE_UPDATED")
 end
 
+-- Per-character option defaults. Reset settings (Options tab) puts these back.
+addon.OPTION_DEFAULTS = {
+    disabled = false,        -- per-character live toggle (see IsDisabled): everything stays loaded
+                             -- but the addon observes, sends, trades, and acts on nothing
+    resultPopupAutoCloseEnabled = true,
+    resultPopupAutoCloseSeconds = 10,
+    forceKeepResultPopup = true,   -- LM only: finished-loot winner popups stay open for the
+                                   -- whole raid, overriding each player's own auto-close setting.
+    rollDuration = 30,
+    rollBatchSize = 5,
+    autoStartRoll = true,  -- LM only; mutex with db.autoRoll and autoSkipRoll. New loot
+                            -- broadcasts the DROP immediately (NEW -> ROLLING, no popup gate).
+    autoSkipRoll = false,   -- LM only; mutex with db.autoRoll and autoStartRoll. New loot
+                            -- moves straight to SKIPPED (auto-resurfaces on the next scan).
+    hideUnusableRolls = false,   -- raider opt-in: hide roll popups for items your CLASS can't use
+                                 -- (armor/weapon proficiency only; unique-owned/quest-done still show)
+    hideUnrolledWins = false,    -- raider opt-in: suppress the win banner for loot you did not roll
+                                 -- on -- items you passed on, or whose roll prompt your white/black
+                                 -- list or hide-unusable filter hid. Off by default.
+    whitelistEnabled = false,
+    whitelistText = "",
+    blacklistEnabled = false,
+    blacklistText = "",
+    customBlacklistPresets = {},
+    customWhitelistPresets = {},
+    minimapButtonHidden = false,
+    rollResultTooltipAnchor = "RIGHT",   -- where roll-popup hover tooltips dock: RIGHT/LEFT/TOP/BOTTOM/CURSOR
+    explanationTooltipsEnabled = true,   -- hover tooltips that spell things out (e.g. the roll brackets, popup + loot tab)
+    bannerMinimal = true,                -- loot banner look: minimalist (per-card badge, no chrome) vs full; minimal is the default
+    bannerInstant = false,               -- loot banner animations: snappy (instant) vs smooth
+    bannerMLSide = "RIGHT",              -- which card edge the ML roll controls (End/Cancel) hang off: RIGHT/LEFT
+    bannerLocked = false,                -- lock the loot banner in place (drag disabled)
+}
+
 function addon:PLAYER_LOGIN()
     WeirdLootDB = addon.util:EnsureDefaults(WeirdLootDB, {
         testMode = false,        -- in-city testing: treat ANY bag item as session loot
@@ -184,38 +218,7 @@ function addon:PLAYER_LOGIN()
     -- self.db proxy below routes .options/.ui here, so the rest of the addon still reads
     -- self.db.options / self.db.ui unchanged. config + session stay account-wide (see PLAYER_LOGIN).
     WeirdLootCharDB = addon.util:EnsureDefaults(WeirdLootCharDB, {
-        options = {
-            disabled = false,        -- per-character live toggle (see IsDisabled): everything stays loaded
-                                     -- but the addon observes, sends, trades, and acts on nothing
-            resultPopupAutoCloseEnabled = true,
-            resultPopupAutoCloseSeconds = 10,
-            forceKeepResultPopup = true,   -- LM only: finished-loot winner popups stay open for the
-                                           -- whole raid, overriding each player's own auto-close setting.
-            rollDuration = 30,
-            rollBatchSize = 5,
-            autoStartRoll = true,  -- LM only; mutex with db.autoRoll and autoSkipRoll. New loot
-                                    -- broadcasts the DROP immediately (NEW -> ROLLING, no popup gate).
-            autoSkipRoll = false,   -- LM only; mutex with db.autoRoll and autoStartRoll. New loot
-                                    -- moves straight to SKIPPED (auto-resurfaces on the next scan).
-            hideUnusableRolls = false,   -- raider opt-in: hide roll popups for items your CLASS can't use
-                                         -- (armor/weapon proficiency only; unique-owned/quest-done still show)
-            hideUnrolledWins = false,    -- raider opt-in: suppress the win banner for loot you did not roll
-                                         -- on -- items you passed on, or whose roll prompt your white/black
-                                         -- list or hide-unusable filter hid. Off by default.
-            whitelistEnabled = false,
-            whitelistText = "",
-            blacklistEnabled = false,
-            blacklistText = "",
-            customBlacklistPresets = {},
-            customWhitelistPresets = {},
-            minimapButtonHidden = false,
-            rollResultTooltipAnchor = "RIGHT",   -- where roll-popup hover tooltips dock: RIGHT/LEFT/TOP/BOTTOM/CURSOR
-            explanationTooltipsEnabled = true,   -- hover tooltips that spell things out (e.g. the roll brackets, popup + loot tab)
-            bannerMinimal = true,                -- loot banner look: minimalist (per-card badge, no chrome) vs full; minimal is the default
-            bannerInstant = false,               -- loot banner animations: snappy (instant) vs smooth
-            bannerMLSide = "RIGHT",              -- which card edge the ML roll controls (End/Cancel) hang off: RIGHT/LEFT
-            bannerLocked = false,                -- lock the loot banner in place (drag disabled)
-        },
+        options = addon.util:CloneTable(addon.OPTION_DEFAULTS),
         ui = {
             selectedTab = "loot",
             lootSortMode = "recent",       -- "recent" = mint order, newest first; name/type/slot/info via header click
@@ -364,6 +367,7 @@ function addon:PLAYER_LOGIN()
     self.events:RegisterEvent("LOOT_BIND_CONFIRM")
     self.events:RegisterEvent("PLAYER_TARGET_CHANGED")
     self.events:RegisterEvent("GUILD_ROSTER_UPDATE")
+    self.events:RegisterEvent("UI_ERROR_MESSAGE")
     self:RequestGuildRoster()
 
     if self:IsDisabled() then
@@ -681,11 +685,9 @@ function addon:HandleSlashCommand(msg)
     elseif command == "deer" or string.sub(command, 1, 5) == "deer " then
         local name = string.match(string.trim(msg or ""), "^%S+%s+(.+)$")
         if name and string.trim(name) ~= "" then
-            self.db.deer = string.trim(name)
-            self:Print("Disenchanter set to " .. self.db.deer .. " (non-epic BoE auto-routes there).")
+            self:SetGreensDisenchanter(string.trim(name))
         else
-            self.db.deer = nil
-            self:Print("Disenchanter cleared.")
+            self:SetGreensDisenchanter(nil)
         end
         if self.RefreshOptionsTab then self:RefreshOptionsTab() end
     else

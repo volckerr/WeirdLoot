@@ -3649,6 +3649,29 @@ test("ml-prompt: resolving as ML with an active session asks, and withholds auth
     eq(w.addon.session.id, "5", "session untouched while held")
 end)
 
+test("ml-prompt: a greens ask while the prompt is open waits for the answer (Keep names who is full)", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    w.addon:PromptGreensDisenchanter(nil, nil, "Dravekc's bags are full.")
+    check(not (w.addon._greensPrompt and w.addon._greensPrompt:IsShown()), "no box while authority is held")
+    dialog(w).OnCancel()
+    local f = w.addon._greensPrompt
+    check(f and f:IsShown(), "box opens on Keep")
+    eq(f and f.gone, "Dravekc's bags are full.", "with the reason")
+end)
+
+test("ml-prompt: a greens ask waiting on Start Fresh opens without the old disenchanter", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    w.addon:PromptGreensDisenchanter(nil, nil, "Dravekc's bags are full.")
+    dialog(w).OnAccept()
+    local f = w.addon._greensPrompt
+    check(f and f:IsShown(), "box opens on Start Fresh")
+    eq(f and f.gone, nil, "no reason line: the new session has no disenchanter")
+end)
+
 test("ml-prompt: Keep lands authority and runs the deferred snapshot broadcast", function()
     local w = makeWorld("Promotee", false)
     leftover(w, 3600)
@@ -3892,7 +3915,7 @@ end)
 -- This file's own tests ran inline above; their pass/fail counts are already folded into F.
 -- The final summary below totals everything.
 -- ===========================================================================
-local suites = { "tests/unit_util.lua", "tests/unit_config.lua", "tests/unit_guildroster.lua", "tests/unit_lootcore.lua", "tests/unit_resolver.lua", "tests/unit_iteminfo.lua", "tests/unit_preset_registry.lua", "tests/unit_bagslots.lua", "tests/unit_itemfilter.lua", "tests/unit_toc.lua", "tests/unit_version.lua", "tests/unit_perchar.lua", "tests/unit_debug.lua", "tests/unit_upcomingrolls.lua", "tests/unit_uiload.lua", "tests/unit_bannerlifetime.lua", "tests/unit_phantom.lua", "tests/unit_mlloan.lua" }
+local suites = { "tests/unit_util.lua", "tests/unit_config.lua", "tests/unit_guildroster.lua", "tests/unit_lootcore.lua", "tests/unit_resolver.lua", "tests/unit_iteminfo.lua", "tests/unit_preset_registry.lua", "tests/unit_bagslots.lua", "tests/unit_itemfilter.lua", "tests/unit_toc.lua", "tests/unit_version.lua", "tests/unit_perchar.lua", "tests/unit_debug.lua", "tests/unit_upcomingrolls.lua", "tests/unit_uiload.lua", "tests/unit_bannerlifetime.lua", "tests/unit_phantom.lua", "tests/unit_mlloan.lua", "tests/unit_disenchant.lua" }
 for _, path in ipairs(suites) do
     print(string.format("\n--- running %s ---", path))
     local ok, err = pcall(dofile, path)

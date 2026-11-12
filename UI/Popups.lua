@@ -236,6 +236,16 @@ StaticPopupDialogs["WEIRDLOOT_FRESH_SESSION_ON_ML"] = {
     showAlert = 1,
 }
 
+StaticPopupDialogs["WEIRDLOOT_RESET_OPTIONS"] = {
+    text = "Reset all WeirdLoot settings to their defaults?\n\nYour session, loot history, and white and black lists are kept.",
+    button1 = "Reset",
+    button2 = CANCEL,
+    OnAccept = function() addon:ResetOptions() end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+}
+
 -- Restarting mid-session wipes the live roll/loot tally and re-baselines from current bags
 -- (StartLootSession resets lootCore, responses and owed payouts), so gate it behind an explicit
 -- confirmation the same way End Session is.

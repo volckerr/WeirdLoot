@@ -458,6 +458,7 @@ function addon:SyncApplySnapshot(lines, epoch)
         end
     end
     self.lootCore:ApplyRemote({ seq = seq, lots = lots })
+    if self.ReportEnchanting then self:ReportEnchanting() end   -- a new session (or ML) hears our skill once
     -- reflect the ML's freshly-synced accepting-trades flag + loot-master presence (guarded: the
     -- minimap UI may not be loaded)
     if self.UpdateMinimapTradeStatus then self:UpdateMinimapTradeStatus() end
@@ -697,6 +698,8 @@ function addon:HandleCommMessage(sender, value)
             return
         end
         self:SetPlayerResponse(fields[2], fields[3], fields[4]) -- ML core write; snapshot syncs back
+    elseif command == "ENCH" then
+        self:OnEnchantingReport(sender, fields[1], fields[2])   -- raider's Enchanting and free bag slots (Disenchant.lua)
     elseif command == "NAMED_ITEMS_SYNC" then
         local expectedLootMaster = util:NormalizeKey(self:GetLootMasterName() or "")
         local senderKey = util:NormalizeKey(sender or "")

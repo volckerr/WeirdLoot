@@ -5,7 +5,8 @@ local util = addon.util
 -- the master looter, each item in an opened loot window is assigned by type:
 --   * Bind-on-Pickup (any quality)  -> the loot master (held for rolling)
 --   * epic Bind-on-Equip            -> the loot master
---   * non-epic Bind-on-Equip        -> the designated disenchanter (WeirdLootDB.deer)
+--   * non-epic Bind-on-Equip        -> the session's disenchanter (session.deer); the first green of a
+--                                      session with none set asks the ML who (Disenchant.lua)
 -- Items the ML keeps land in the ML's bags, where the bag delta auto-starts a live
 -- roll; DE trash goes straight to the disenchanter's bags.
 --
@@ -103,9 +104,20 @@ function addon:LOOT_OPENED()
     -- routing assigns below start clearing slots (LootObserver: quest-drop-missing warning +
     -- pending phantom sends, which may assign their slots first).
     self:ObserveLootOpened()
+    self:RouteLootSlots()
+end
 
+-- Hand out the open loot window's slots by binding and quality. Runs on LOOT_OPENED and again once the
+-- greens prompt is answered (the window may still be open), so the waiting greens go out at once.
+function addon:RouteLootSlots()
+    local session = self:GetCurrentSession()
     local selfIdx = self:FindMasterLootCandidate(UnitName("player"))
-    local deerIdx = self.db.deer and self:FindMasterLootCandidate(self.db.deer) or nil
+    local deer = session.deer or (session.deerSelf and UnitName("player")) or nil
+    local deerIdx = deer and self:FindMasterLootCandidate(deer) or nil
+    -- the chosen disenchanter cannot take loot now (offline, out of range): ask again instead of leaving
+    -- the greens in the corpse with no word
+    local deerGone = deer and not deerIdx and session.deer
+    local firstGreen, blues = nil, {}
 
     for slot = 1, GetNumLootItems() do
         -- a slot the observer just assigned to a phantom-send target is spoken for
@@ -130,12 +142,29 @@ function addon:LOOT_OPENED()
                     target = selfIdx                              -- BoP -> ML
                 end
             elseif bind == "boe" then
-                target = ((quality or 0) >= 4) and selfIdx or deerIdx  -- epic BoE -> ML; else DE'er
+                if (quality or 0) >= 4 then
+                    target = selfIdx                              -- epic BoE -> ML
+                elseif (quality == 2 and not deer) or (deerGone and quality <= 3) then
+                    firstGreen = firstGreen or { itemId = itemId, link = link }   -- waits for the prompt
+                elseif not deer then
+                    blues[#blues + 1] = slot                      -- a blue with nobody chosen yet: see below
+                else
+                    target = deerIdx                              -- non-epic BoE -> the disenchanter
+                    self._deerSentAt, self._deerSentTo = GetTime(), deer   -- a full-bag refusal names them
+                end
             end
             if target then
                 GiveMasterLoot(slot, target)
             end
         end
+    end
+    -- blues ride with the greens: they wait for the box when it opens, else go to the ML
+    if not firstGreen then
+        for _, slot in ipairs(blues) do GiveMasterLoot(slot, selfIdx) end
+    end
+    if firstGreen and self.PromptGreensDisenchanter then
+        if deerGone then self:Print(deerGone .. " can't take loot right now (offline or too far): choose who takes greens.") end
+        self:PromptGreensDisenchanter(firstGreen.itemId, firstGreen.link, deerGone and (deerGone .. " can't take loot."))
     end
 end
 
