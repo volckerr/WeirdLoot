@@ -429,6 +429,41 @@ H.test("greens: the disenchanter's bags are full -> told, and asked who takes gr
     H.eq(w.addon:DisenchanterFreeSlots("Halricb"), 0, "the box shows Halricb at 0 free")
 end)
 
+H.test("greens: picking the same full disenchanter again is refused again -> asked again", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked = 0
+    w.addon.PromptGreensDisenchanter = function() asked = asked + 1 end
+    w.addon:SetGreensDisenchanter("Halricb", true)
+    local given = mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    H.eq(asked, 1, "first refusal: asked")
+    w.addon:SetGreensDisenchanter("Halricb", true)   -- the box's row click: pick him again...
+    w.addon:RouteLootSlots()                         -- ...and the waiting greens go out at once
+    H.eq(#given, 2, "sent to him again")
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    H.eq(asked, 2, "second refusal: asked again")
+end)
+
+H.test("greens: Keep greens myself with the ML's own bags full -> asked, and greens stop going to the ML", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked
+    w.addon.PromptGreensDisenchanter = function(self, itemId, link, who) asked = who or true end
+    w.addon:KeepGreensMyself()
+    local given = mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    H.eq(given[1] and given[1].idx, 1, "Keep: the green goes to the ML")
+    w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    H.eq(asked, "Masterlooter's bags are full.", "asked, naming the ML")
+    H.eq(w.addon:GetCurrentSession().deerSelf, nil, "Keep is off until a new choice")
+    w.addon:LOOT_OPENED()
+    H.eq(#given, 1, "re-opening the corpse sends nothing more to the full ML")
+end)
+
 -- Fragment of Val'anyr is BoP legendary, so every branch below would otherwise route it to the ML.
 -- addon.AUTOLOOT_NEVER bans it outright: the slot stays in the corpse for a manual assign.
 H.test("autoloot: a banned item is left in the corpse; the BoP beside it still goes to the ML", function()

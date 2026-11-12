@@ -385,7 +385,7 @@ test("bags: the report carries free slots; the ML shows them coloured", function
     F.clearWire(); ml.addon:BroadcastSession(); F.flushWireTo(raider)
     F.flushWireTo(ml)
     eq(ml.addon:DisenchanterFreeSlots("Raidertwo"), 18, "16 + 2 free")
-    check(ml.addon:FreeSlotsText("Raidertwo"):find("18 free"), "grey count")
+    check(ml.addon:FreeSlotsText("Raidertwo"):find("80cc80", 1, true) and ml.addon:FreeSlotsText("Raidertwo"):find("18 free"), "mild green at 10 or more")
     ml.addon:GetCurrentSession().deBags["raidertwo"] = 7
     check(ml.addon:FreeSlotsText("Raidertwo"):find("ffd200"), "yellow under 10")
     ml.addon:GetCurrentSession().deBags["raidertwo"] = 2

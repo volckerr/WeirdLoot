@@ -118,11 +118,11 @@ function addon:DisenchanterFreeSlots(who)
     return bags and bags[key]
 end
 
--- "22 free" coloured by how soon they fill: red under 5, yellow under 10, grey otherwise; "-" unknown.
+-- "22 free" coloured by how soon they fill: red under 5, yellow under 10, mild green otherwise; "-" unknown.
 function addon:FreeSlotsText(who)
     local n = self:DisenchanterFreeSlots(who)
     if not n then return "|cff9a9a9a-|r" end
-    local c = (n < 5 and "ff4040") or (n < 10 and "ffd200") or "9a9a9a"
+    local c = (n < 5 and "ff4040") or (n < 10 and "ffd200") or "80cc80"
     return "|cff" .. c .. n .. " free|r"
 end
 
@@ -248,6 +248,9 @@ local function buildGreensPrompt(self)
     f.keep:SetWidth(130); f.keep:SetHeight(20)
     f.keep:SetText("Keep greens myself")
     f.keep:SetScript("OnClick", function() self:KeepGreensMyself(); self:RouteLootSlots() end)
+    -- the ML's own free slots, in line with the names' column
+    f.keep.free = f.keep:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    f.keep.free:SetPoint("LEFT", f.keep, "RIGHT", 6, 0)
     -- a popup opening or closing while we are up: move to stay clear of it
     for i = 1, (STATICPOPUP_NUMDIALOGS or 4) do
         local p = _G["StaticPopup" .. i]
@@ -304,19 +307,20 @@ function addon:PromptGreensDisenchanter(itemId, link, gone)
             f.rows[i]:ClearAllPoints()
             f.rows[i]:SetPoint("TOP", f.item, "BOTTOM", -24, -6 - (i - 1) * ROW_H)
         end
-        f.keep:SetPoint("TOP", f.item, "BOTTOM", 0, -10 - #cands * ROW_H)
+        f.keep:SetPoint("TOP", f.item, "BOTTOM", -24, -10 - #cands * ROW_H)
         h = 72 + (tonumber(f.item:GetStringHeight()) or 12) + #cands * ROW_H
     elseif #cands > 0 then
         f.item:Hide()
-        f.keep:SetPoint("TOP", f.title, "BOTTOM", 0, -10 - #cands * ROW_H)
+        f.keep:SetPoint("TOP", f.title, "BOTTOM", -24, -10 - #cands * ROW_H)
         h = 68 + #cands * ROW_H
     else
         f.item:SetText("No one in the raid can disenchant greens"
             .. (need and (" (needs Enchanting " .. need .. ").") or "."))
         f.item:Show()
-        f.keep:SetPoint("TOP", f.item, "BOTTOM", 0, -8)
+        f.keep:SetPoint("TOP", f.item, "BOTTOM", -24, -8)
         h = 76 + (tonumber(f.item:GetStringHeight()) or 24)
     end
+    f.keep.free:SetText(self:FreeSlotsText(util:GetPlayerName("player")))
     f:SetHeight(h)   -- includes padding under Keep, clear of the border
     f.itemId, f.link, f.gone = itemId, link, gone
     placeGreensPrompt(f)
@@ -333,7 +337,7 @@ function addon:UI_ERROR_MESSAGE(msg)
     if self._greensPrompt and self._greensPrompt:IsShown() then return end   -- one ask per refused batch
     self:Print((who or "The disenchanter") .. "'s bags are full: the greens stay in the corpse. Choose who takes greens.")
     local session = self:GetCurrentSession()
-    session.deer = nil   -- re-open the corpse after choosing
+    session.deer, session.deerSelf = nil, nil   -- greens wait in the corpse for a new choice (Keep included)
     if who then
         session.deBags = session.deBags or {}
         session.deBags[util:NormalizeKey(who)] = 0

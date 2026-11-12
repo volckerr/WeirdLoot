@@ -262,7 +262,7 @@ function addon:RefreshMasterTab()
     -- without holding loot authority; the receive gate in Comm mirrors this.
     local session = self:GetCurrentSession()
     local deerText = session.deer and ("|cfff58cba" .. session.deer .. "|r")
-        or (session.deerSelf and "you (keeping greens)") or "|cff9a9384not chosen yet (asked on the first green)|r"
+        or (session.deerSelf and util:ColorPlayerName(util:GetPlayerName("player"))) or "|cff9a9384not chosen yet (asked on the first green)|r"
     panel.deerLabel:SetText("|cffffd200Disenchanter:|r " .. deerText)
     if authorized and session.active then panel.deerButton:Enable() else panel.deerButton:Disable() end
 
