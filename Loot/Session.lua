@@ -451,6 +451,10 @@ end
 function addon:AssumeLootMasterSession()
     if not self.session or not self.session.active then return end
     if not self._mirrorActive then return end          -- not a live mirror: do not rebroadcast stale loot
+    -- We are the authority now, not a mirror: only another ML's snapshot makes us one again. A later
+    -- regain (a loot-method round trip, or a handoff to an ML without WeirdLoot) is then judged on its
+    -- own instead of re-minting this session again.
+    self._mirrorActive = false
     self.session.id = self:NextEpoch()
     self.session.ownerKey = self:GetSessionOwnerKey()
     self.session.startedAt = time()                    -- our tenure starts now (shown by the ML prompt)

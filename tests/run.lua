@@ -3659,6 +3659,24 @@ test("ml-prompt: the loot method leaving master and coming back (Mimiron) does n
     eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "a later handoff and back still asks")
 end)
 
+test("handoff: once a mirror has taken over, a loot-method round trip keeps its epoch", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w)
+    w.addon._mirrorActive = true                             -- mirroring the previous ML's live session
+    local shown = engageML(w)
+    eq(shown, nil, "taking over a live mirror: no prompt")
+    local taken = w.addon.session.id
+    check(tonumber(taken) > 5, "took over under a new epoch")
+    eq(w.addon._mirrorActive, false, "and is the authority now, not a mirror")
+    local master = w.env.GetLootMethod
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    w.env.GetLootMethod = master
+    shown = engageML(w)
+    eq(shown, nil, "master loot back: no prompt")
+    eq(w.addon.session.id, taken, "and no second takeover epoch")
+end)
+
 test("ml-prompt: after a loot-method change, a handoff to another ML or leaving the raid asks again", function()
     local w = makeWorld("Promotee", false)
     leftover(w, 3600)
