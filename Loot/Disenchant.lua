@@ -13,11 +13,13 @@ local DE_BASELINE = { [2] = 350, [3] = 325, [4] = 375 }
 local GREEN_BASELINE = DE_BASELINE[2]
 
 -- The baseline for itemId, or nil when it cannot be disenchanted (not armor or a weapon, below green,
--- above epic) or is not cached yet.
+-- above epic) or is not cached yet. An epic that binds on equip is never offered: unrolled, it stays
+-- with the loot master (it can still be traded or sold).
 function addon:DisenchantSkillFor(itemId)
     local _, _, quality, _, _, itemType = GetItemInfo(itemId)
     local need = quality and DE_BASELINE[quality]
     if not need then return nil end
+    if quality == 4 and self:IsItemBoE(itemId) then return nil end
     local weapon, armor = GetAuctionItemClasses()
     if itemType ~= weapon and itemType ~= armor then return nil end
     return need

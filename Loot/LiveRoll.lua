@@ -1195,6 +1195,23 @@ function addon:IsItemPureUnique(itemId)
     return false
 end
 
+-- Does itemId bind on equip? GetItemInfo has no bind type in 3.3.5a, so the by-id tooltip is scanned.
+local BOE_LINE = ITEM_BIND_ON_EQUIP or "Binds when equipped"
+function addon:IsItemBoE(itemId)
+    if not itemId then return false end
+    if not self._scanTip then
+        self._scanTip = CreateFrame("GameTooltip", "WeirdLootScanTip", UIParent, "GameTooltipTemplate")
+    end
+    self._scanTip:SetOwner(UIParent, "ANCHOR_NONE")
+    self._scanTip:ClearLines()
+    self._scanTip:SetHyperlink("item:" .. tostring(itemId))
+    for i = 2, self._scanTip:NumLines() do
+        local fs = _G["WeirdLootScanTipTextLeft" .. i]
+        if fs and fs:GetText() == BOE_LINE then return true end
+    end
+    return false
+end
+
 -- Is itemId a MOUNT the player has already learned? Learning consumed the original item, so no
 -- ownership count can see this; instead the client stamps the red ITEM_SPELL_KNOWN line
 -- ("Already known", GlobalStrings) on a learned mount's tooltip, so we scan for it with the same

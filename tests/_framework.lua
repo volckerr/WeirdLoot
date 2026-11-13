@@ -221,6 +221,7 @@ function self.makeWorld(playerName, isML, globals)
                 if cur and cur.bound then lines[#lines + 1] = env.ITEM_SOULBOUND end
                 if cur and cur.win   then lines[#lines + 1] = string.format(env.BIND_TRADE_TIME_REMAINING, cur.win .. " sec") end
                 if cur and cur.known then lines[#lines + 1] = env.ITEM_SPELL_KNOWN end
+                if cur and cur.boe   then lines[#lines + 1] = env.ITEM_BIND_ON_EQUIP end
             end
             tip.__lines = lines
             for i = 1, 32 do
@@ -233,7 +234,8 @@ function self.makeWorld(playerName, isML, globals)
         -- (learned mounts; the real client stamps ITEM_SPELL_KNOWN on their tooltips)
         tip.SetHyperlink = function(_, link)
             local id = tonumber(string.match(tostring(link or ""), "item:(%d+)"))
-            cur = (id and env.__knownItems[id]) and { known = true } or nil
+            cur = id and (env.__knownItems[id] or env.__boeItems[id])
+                and { known = env.__knownItems[id], boe = env.__boeItems[id] } or nil
             rebuild()
         end
         tip.NumLines = function() return tip.__lines and #tip.__lines or 0 end
@@ -244,6 +246,7 @@ function self.makeWorld(playerName, isML, globals)
     -- ---- WoW API stubs ----
     local SCAN_TIP_NAMES = { TradeDeliverScanTip = true, WeirdLootScanTooltip = true, WeirdLootScanTip = true }
     env.__knownItems = {}                            -- [itemId] = true: tooltip carries "Already known"
+    env.__boeItems = {}                              -- [itemId] = true: tooltip carries "Binds when equipped"
     env.CreateFrame = function(_, name, parent)
         local f = SCAN_TIP_NAMES[name] and newScanTip(name) or newFrame()
         if name then env[name] = f; f.__name = name end
