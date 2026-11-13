@@ -137,10 +137,8 @@ def block_lines(rows, base, warn, size=None):
                         specs.append(value)
                 if names and specs:
                     warn(f"{item}: a tier holding both names and specs ranks the names first, not equally")
-                # LC after a spec is fine: the addon gives it to the spec list, after the specs
-                late = [n for n in names if n.lower() != "lc"]
-                if late and seen_spec:
-                    warn(f"{item}: the addon tries every name before any spec, so {late!r} "
+                if names and seen_spec:
+                    warn(f"{item}: the addon tries every name before any spec, so {names!r} "
                          f"cannot rank below a spec tier")
                 if specs:
                     seen_spec = True

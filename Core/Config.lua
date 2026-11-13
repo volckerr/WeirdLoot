@@ -177,50 +177,6 @@ function addon:SerializeRosterEntries(entries)
     return table.concat(lines, "\n")
 end
 
--- The spec passes also keep "LC", so a spec list can end in loot council ("hunter > LC").
-function addon:ParseSpecOrLCToken(token)
-    local key = util:NormalizeKey(token)
-    if key == "lc" or key == "loot council" then return { isLootCouncil = true, raw = "LC" } end
-    return self:ParseClassSpecToken(token)
-end
-
-function addon:ParseSpecRuleOrLCToken(token)
-    local key = util:NormalizeKey(token)
-    if key == "lc" or key == "loot council" then return { isLootCouncil = true, raw = "LC" } end
-    return self:ParseSpecRuleToken(token)
-end
-
-local function isLCTier(tier)
-    for _, e in ipairs(tier.entries or {}) do if e.isLootCouncil then return true end end
-    return false
-end
-
--- A spec rule parsed from the named paste: the index of its first real spec tier, after dropping any
--- LC tier that no spec precedes (that LC is the named rule's). nil when the line has no spec at all.
-local function specLCSplit(rule)
-    local firstSpec
-    local kept = {}
-    for _, tier in ipairs(rule.tiers or {}) do
-        if isLCTier(tier) then
-            if firstSpec then kept[#kept + 1] = tier end
-        else
-            firstSpec = firstSpec or tier.index
-            kept[#kept + 1] = tier
-        end
-    end
-    rule.tiers = kept
-    return firstSpec
-end
-
--- The named rule's tiers without any LC that comes after the line's first spec tier.
-local function withoutLCAfter(tiers, firstSpec)
-    local out = {}
-    for _, tier in ipairs(tiers or {}) do
-        if not (isLCTier(tier) and tier.index > firstSpec) then out[#out + 1] = tier end
-    end
-    return out
-end
-
 function addon:ParseTieredRuleText(text, parser)
     local rules = {}
 
@@ -338,17 +294,8 @@ function addon:NormalizeAllConfig()
     -- One pasted list carries both kinds of token, so it is parsed twice and each pass keeps its own.
     -- Spec rules from the paste sit on top of the shipped list, which holds the hand-written rules for
     -- raids the loot sheet does not cover.
-    local lootRules = self:ParseTieredRuleText(self.config.lootPriorityText or "", self.ParseSpecOrLCToken)
-    local namedRules = self:ParseTieredRuleText(self.config.namedItemsText or "", self.ParseNamedToken)
-    for itemKey, rule in pairs(self:ParseTieredRuleText(self.config.namedItemsText or "", self.ParseSpecRuleOrLCToken)) do
-        -- LC after a spec tier ("hunter > LC") belongs to the spec rule: the specs ahead of it get their
-        -- chance first. The named rule must then not carry it, or it would decide before any spec.
-        -- An LC with no spec ahead of it stays named only.
-        local firstSpec = specLCSplit(rule)
-        local named = namedRules[itemKey]
-        if firstSpec and named then
-            named.tiers = withoutLCAfter(named.tiers, firstSpec)
-        end
+    local lootRules = self:ParseTieredRuleText(self.config.lootPriorityText or "", self.ParseClassSpecToken)
+    for itemKey, rule in pairs(self:ParseTieredRuleText(self.config.namedItemsText or "", self.ParseSpecRuleToken)) do
         -- A line of pure player names yields a rule with no tiers; that is not a spec rule and must
         -- not displace the shipped one for the same item.
         if #(rule.tiers or {}) > 0 then
@@ -356,7 +303,7 @@ function addon:NormalizeAllConfig()
         end
     end
     self.config.lootRules = lootRules
-    self.config.namedRules = namedRules
+    self.config.namedRules = self:ParseTieredRuleText(self.config.namedItemsText or "", self.ParseNamedToken)
 end
 
 function addon:GetItemInfoEntry(itemName)

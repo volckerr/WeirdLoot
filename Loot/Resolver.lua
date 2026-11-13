@@ -60,13 +60,11 @@ function addon:FindMatchingTier(rule, candidates, matcher)
     for _, tier in ipairs(rule.tiers) do
         local survivors = {}
         local matchedKeys = {}
-        local hasRest, hasLC = false, false
+        local hasRest = false
 
         for _, entry in ipairs(tier.entries) do
             if entry.isRest then
                 hasRest = true
-            elseif entry.isLootCouncil then
-                hasLC = true
             else
                 for _, candidate in ipairs(candidates) do
                     if not matchedKeys[candidate.name] and matcher(entry, candidate) then
@@ -83,10 +81,6 @@ function addon:FindMatchingTier(rule, candidates, matcher)
 
         if hasRest then
             return tier, unmatched
-        end
-        -- reached with no match above it: the council decides among everyone left
-        if hasLC then
-            return tier, unmatched, true
         end
     end
 
@@ -686,11 +680,6 @@ function addon:ResolveSessionItem(lot)
     if topKey then
         local mergeMainAndAlt = topKey ~= "bis"
         local _, prioritized, isLootCouncil = self:FindMatchingNamedTier(namedRule, topRollers)
-        if not isLootCouncil and lootRule and not (namedRule and self:FindMatchingNamedTier(namedRule, topRollers)) then
-            -- the spec list ends in LC ("hunter > LC") and no spec ahead of it rolled: the council decides
-            local _, specPrioritized, specLC = self:FindMatchingTier(lootRule, topRollers, specMatcher)
-            if specLC then isLootCouncil, prioritized, lootRule = true, specPrioritized, nil end
-        end
         if isLootCouncil then
             local councilCandidates = prioritized
             local displaySpecPriorityText = defaultSpecPriorityText or "LC"
