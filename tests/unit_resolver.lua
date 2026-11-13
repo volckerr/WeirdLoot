@@ -674,8 +674,11 @@ test("shipped list: the two Reply-Code Alpha sizes carry different priorities, k
     local big = strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46053 }))
     local small = strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46052 }))
     H.check(big ~= small, "the sizes differ: 25=" .. big .. " 10=" .. small)
-    H.check(big:find("Zenkahi", 1, true) ~= nil, "25-man keeps the full chain")
-    H.check(small:find("Zenkahi", 1, true) == nil, "10-man does not inherit the 25-man chain: " .. small)
+    -- the first name on the shipped 25-man line, so a sheet refresh does not break the test
+    local first = w.addon.defaultNamedItemsText:match("46053, (%a+)")
+    H.check(first ~= nil, "the shipped list has a 25-man line")
+    H.check(big:find(first, 1, true) ~= nil, "25-man keeps the full chain: " .. big)
+    H.check(small:find(first, 1, true) == nil, "10-man does not inherit the 25-man chain: " .. small)
 end)
 
 test("display: the spec tail is dropped past two named raiders, but still decides the roll", function()
