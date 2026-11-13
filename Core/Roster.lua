@@ -327,6 +327,12 @@ function addon:RefreshLootAuthority()
         self._mlMethodPause = nil
         self:LogCoreEvent("ml-resume", { epoch = sessionId })
     end
+    if isLootMaster and not wasLootMaster and self:RosterNamesMissing() > 0 then
+        -- half a roster: nothing may run on it, the start-fresh prompt included, until the names arrive
+        -- (RAID_ROSTER_UPDATE re-runs this) or the login check warns
+        isLootMaster = false
+        self:ArmRosterCheck()
+    end
     if isLootMaster and not wasLootMaster and not self._mlPromptAnswering and not methodResumed
         and self:ShouldPromptFreshSessionOnML(loan) then
         self:PromptFreshSessionOnML()
@@ -334,6 +340,15 @@ function addon:RefreshLootAuthority()
     if self._mlPromptPending then isLootMaster = false end
     self.roster.lootMasterName = lootMasterName
     self.roster.isLootMaster = isLootMaster
+    -- whether this session is ours to run: an empty raid after a login is only suspicious if it was
+    if self.session and self.session.active then
+        if isLootMaster then
+            self.session.wasML = true
+        elseif lootMasterName and lootMasterName ~= "" and playerName
+            and util:NormalizeKey(lootMasterName) ~= util:NormalizeKey(playerName) then
+            self.session.wasML = nil
+        end
+    end
     self.roster.mlRosterUnreadable = self:RosterUnreadableForML(method, partyMasterIndex, raidMasterIndex, nameAtML)
 
     if self.roster.mlRosterUnreadable then
@@ -342,13 +357,8 @@ function addon:RefreshLootAuthority()
         -- and the flag is gone. If it is STILL set past settle, the server has genuinely failed to send
         -- our roster row this session (rare). There is no API to re-request the member roster, so the
         -- only repair is /reload, which reconnects the UI and pulls a fresh roster. Hence the message.
-        local settled = self.bagSettleAt and (GetTime() >= self.bagSettleAt)
-        if settled and not self._rosterReloadWarned then
-            self._rosterReloadWarned = true
-            self:Print("|cffff4040The raid roster failed to load; loot-master controls are disabled until you /reload.|r")
-        end
-    else
-        self._rosterReloadWarned = nil
+        -- the login roster check (CheckRoster) does the warning
+        self:ArmRosterCheck()
     end
 
     -- the core needs the ML identity to decide self-win (resolved) vs owed at resolve time
@@ -486,4 +496,78 @@ function addon:GetPlayerDescriptor(playerName)
     local className = attendee.className or ""
     local specName = attendee.specName or ""
     return util:NormalizeKey(className .. " " .. specName)
+end
+
+-- ---------------------------------------------------------------------------
+-- login roster check
+-- ---------------------------------------------------------------------------
+-- This server sometimes logs us in with a raid whose members have no names, or with no raid at all,
+-- and nothing but /reload (or a client restart) brings it back. 10 s after a login the roster is checked;
+-- while it is broken the loot master is told in a box ahead of everything else, and authority (with the
+-- start-fresh prompt) waits. Checked again every 2 s, so the box closes by itself once the roster loads.
+local ROSTER_CHECK_DELAY, ROSTER_RECHECK = 10, 2
+
+-- Raid slots the game can't name (nil, empty or "Unknown").
+function addon:RosterNamesMissing()
+    local n = GetNumRaidMembers() or 0
+    local missing = 0
+    for i = 1, n do
+        local name = GetRaidRosterInfo(i)
+        if not name or name == "" or name == "Unknown" or name == UNKNOWNOBJECT then missing = missing + 1 end
+    end
+    return missing
+end
+
+-- "names": raid members with no names; "empty": no raid, though we ran this session as loot master.
+-- Only when it concerns us: master loot points at us, or the saved session was ours.
+function addon:RosterProblem()
+    if self:IsDisabled() then return nil end
+    local s = self.session
+    local ours = s and s.active and s.wasML
+    if self:RosterNamesMissing() > 0 then
+        local method, partyMasterIndex = GetLootMethod()
+        if ours or (method == "master" and partyMasterIndex == 0) then return "names" end
+        return nil
+    end
+    if ours and not self._rosterLeftRaid and (GetNumRaidMembers() or 0) == 0 and (GetNumPartyMembers() or 0) == 0 then
+        return "empty"
+    end
+end
+
+local rosterTimer = CreateFrame("Frame")
+rosterTimer:Hide()
+rosterTimer:SetScript("OnUpdate", function()
+    if not addon._rosterCheckAt or GetTime() < addon._rosterCheckAt then return end
+    addon._rosterCheckAt = nil
+    rosterTimer:Hide()
+    addon:CheckRoster()
+end)
+
+-- Start (or keep) the login check; a check already due is left as it is.
+function addon:ArmRosterCheck(delay)
+    if self._rosterCheckAt then return end
+    self._rosterCheckAt = GetTime() + (delay or ROSTER_CHECK_DELAY)
+    rosterTimer:Show()
+end
+
+function addon:CheckRoster()
+    local problem = self:RosterProblem()
+    local n, missing = GetNumRaidMembers() or 0, self:RosterNamesMissing()
+    self:LogCoreEvent("roster-check", { n = n, party = GetNumPartyMembers() or 0, missing = missing,
+        problem = problem, wasML = self.session and self.session.wasML or nil })
+    if problem then
+        if self._rosterWarn ~= problem then
+            self._rosterWarn = problem
+            StaticPopup_Hide("WEIRDLOOT_ROSTER_NAMES"); StaticPopup_Hide("WEIRDLOOT_ROSTER_EMPTY")
+            StaticPopup_Show(problem == "names" and "WEIRDLOOT_ROSTER_NAMES" or "WEIRDLOOT_ROSTER_EMPTY")
+            self:Print("|cffff4040The raid roster didn't load. Type /reload, or restart the client if that doesn't fix it.|r")
+        end
+        self:ArmRosterCheck(ROSTER_RECHECK)
+    elseif self._rosterWarn then
+        -- it loaded after all: close the warning and let authority (and the start-fresh prompt) land
+        self._rosterWarn = nil
+        StaticPopup_Hide("WEIRDLOOT_ROSTER_NAMES"); StaticPopup_Hide("WEIRDLOOT_ROSTER_EMPTY")
+        self:Print("The raid roster loaded.")
+        self:RefreshLootAuthority()
+    end
 end

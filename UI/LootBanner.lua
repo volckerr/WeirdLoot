@@ -268,6 +268,7 @@ local PRESS_LOOK  = { bg = { 0.06, 0.06, 0.05, 0.98 }, edge = { 1.00, 0.82, 0.00
 local ACTION_LOOK = { bg = { 0.30, 0.05, 0.04, 0.95 }, edge = { 0.70, 0.25, 0.15, 0.9 } }
 -- the remembered disenchanter: lit, not sunk, so it reads as the default rather than as unavailable
 local LIT_LOOK    = { bg = { 0.38, 0.30, 0.06, 0.98 }, edge = { 1.00, 0.82, 0.00, 1.0 } }
+local BLOCKED_LOOK = { bg = { 0.11, 0.10, 0.09, 0.95 }, edge = { 0.29, 0.27, 0.23, 0.9 } }
 
 local function applyLook(row, look, sunk)
     row:SetBackdropColor(unpack(look.bg))
@@ -380,7 +381,7 @@ local function populateLCFlyout(frame, data)
             local current = target and (de or #cands > 1) and c.name
                 and util:NormalizeKey(c.name) == util:NormalizeKey(target) or false
             placeNameRow(frame, row, -20 - (i - 1) * FLYOUT_STEP, current, de and current)
-            row.text:SetText(colorName(c.name, c.class))
+            row.text:SetText(c.blocked and ("|cff777777" .. c.name .. "|r") or colorName(c.name, c.class))
             -- disenchant rows show free bag slots, not skill: everyone listed can take it
             -- the free-slot text takes the roll and (empty) pick columns together
             row.roll:SetWidth(de and (ROLL_W + 6 + PICK_W) or ROLL_W)
@@ -390,6 +391,12 @@ local function populateLCFlyout(frame, data)
             row.pick:SetText(c.bracket or "")
             row.awardName = c.name
             local pick = de and data.onDisenchant or data.onAward
+            if c.blocked then
+                -- the server refused them this item: shown, greyed with why, not clickable
+                applyLook(row, BLOCKED_LOOK, false)
+                row.roll:SetText("|cff777777" .. (c.blocked == "already has one" and "has one" or c.blocked) .. "|r")
+                pick = nil
+            end
             row:SetScript("OnClick", function() if pick then pick(row.awardName) end end)
             row:Show()
             shown = i
@@ -454,6 +461,7 @@ local function applyDEButton(frame, data)
     end
     btn:SetAlpha(1)
     btn:Show()
+    if data.openDE and btn:IsEnabled() then frame.deOpen = true end
 end
 
 -- roll card second line, shared by card creation and the dedupe re-assert; an item with no
@@ -640,6 +648,8 @@ local function BossBanner_ConfigureLootFrame(lootFrame, data)
         -- roll card: the item's prio sits under the name (bracket buttons sit below it), mirroring
         -- the original roll popup's "Prio:" line.
         nameText = rollPrioText(data.prio)
+    elseif data.refusedText then
+        nameText = "|cffff6060" .. data.refusedText .. "|r"
     elseif data.noWinner and data.deTo then
         nameText = colorName(data.deTo, data.deToClass) .. " |cffaaaaaato disenchant|r"
     elseif data.noWinner then
@@ -2123,6 +2133,8 @@ local function buildBanner(bannerName, medallionCfg)
             onDisenchant = item.onDisenchant, -- no-winner card (ML): send the copy to that raider to disenchant
             deTo = item.deTo, deToClass = item.deToClass, -- no-winner card: already sent to them to disenchant
             getDEDefault = item.getDEDefault, -- no-winner card (ML): the last disenchanter picked, if they can take this one
+            refusedText = item.refusedText, -- corpse send card (ML): the server refused the pick; why, in red
+            openDE = item.openDE,           -- refused disenchant send: open its Disenchant list right away
             onReroll = item.onReroll,   -- won card only: ML reroll callback; present = show the Reroll button
             onLoanCancel = item.onLoanCancel, -- phantom loan card (ML): mid-loan; the flyout shows Cancel instead of the offer
             onForgive = item.onForgive, -- phantom send/loan card (ML): last flyout row writes the lost copy off

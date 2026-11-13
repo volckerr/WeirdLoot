@@ -236,6 +236,32 @@ StaticPopupDialogs["WEIRDLOOT_FRESH_SESSION_ON_ML"] = {
     showAlert = 1,
 }
 
+-- The login roster check (Core/Roster.lua): the raid has no names, or our session's raid is gone.
+StaticPopupDialogs["WEIRDLOOT_ROSTER_NAMES"] = {
+    text = "|cffff4040WeirdLoot: the raid roster didn't load.|r\n\nThe game knows you're in a raid but can't name its members, so WeirdLoot can't run loot.\nType /reload. If that doesn't fix it, restart the client.",
+    button1 = "Reload",
+    button2 = "Not now",
+    OnAccept = function() ReloadUI() end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+    showAlert = 1,
+}
+
+StaticPopupDialogs["WEIRDLOOT_ROSTER_EMPTY"] = {
+    text = "|cffff4040WeirdLoot: the raid roster didn't load.|r\n\nYou were loot master of an active session, but the game shows no raid.\nIf you're still in the raid, type /reload. If that doesn't fix it, restart the client.",
+    button1 = "Reload",
+    button2 = "I left the raid",
+    OnAccept = function() ReloadUI() end,
+    OnCancel = function(_, _, reason)
+        if reason == "clicked" then addon._rosterLeftRaid = true end   -- really left: stop asking this login
+    end,
+    timeout = 0,
+    whileDead = 1,
+    hideOnEscape = 1,
+    showAlert = 1,
+}
+
 StaticPopupDialogs["WEIRDLOOT_RESET_OPTIONS"] = {
     text = "Reset all WeirdLoot settings to their defaults?\n\nYour session, loot history, and white and black lists are kept.",
     button1 = "Reset",

@@ -3672,6 +3672,80 @@ test("ml-prompt: a greens ask waiting on Start Fresh opens without the old disen
     eq(f and f.gone, nil, "no reason line: the new session has no disenchanter")
 end)
 
+test("ml-prompt: /wl start while the prompt is open is its Start Fresh", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    w.addon:HandleSlashCommand("start")
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
+    check(w.addon.session.id ~= "5", "a fresh session started")
+end)
+
+local function popups(w)
+    local shown = {}
+    w.env.StaticPopup_Show = function(which) shown[#shown + 1] = which; return {} end
+    w.env.StaticPopup_Hide = function(which) shown[#shown + 1] = "hide:" .. which end
+    return shown
+end
+local function has(list, v) for _, x in ipairs(list) do if x == v then return true end end return false end
+
+test("roster check: names missing -> no authority, no start-fresh prompt; warned at 10 s; both land when names arrive", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    local me = w.env.UnitName("player")
+    w.env.GetNumRaidMembers = function() return 3 end
+    w.env.GetRaidRosterInfo = function(i) if i == 1 then return me, 2 end return nil, 0 end
+    local shown = popups(w)
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), false, "no authority on half a roster")
+    check(not has(shown, "WEIRDLOOT_FRESH_SESSION_ON_ML"), "the start-fresh prompt waits")
+    F.advanceClock(11); F.pump(w)
+    check(has(shown, "WEIRDLOOT_ROSTER_NAMES"), "warned")
+    w.env.GetRaidRosterInfo = function(i) return ({ me, "Halricb", "Dravekc" })[i], (i == 1) and 2 or 0 end
+    w.addon:RefreshLootAuthority()                  -- RAID_ROSTER_UPDATE: the names arrived
+    check(has(shown, "WEIRDLOOT_FRESH_SESSION_ON_ML"), "now the prompt asks")
+    F.advanceClock(3); F.pump(w)
+    check(has(shown, "hide:WEIRDLOOT_ROSTER_NAMES"), "the warning closes by itself")
+end)
+
+test("roster check: our session's raid is empty after login -> warned; a raider's session is not", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    -- a really empty raid: no members, no master looter named anywhere
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.env.GetNumPartyMembers = function() return 0 end
+    w.env.GetRaidRosterInfo = function() return nil end
+    w.env.GetLootMethod = function() return "freeforall" end
+    local shown = popups(w)
+    w.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(w)
+    check(has(shown, "WEIRDLOOT_ROSTER_EMPTY"), "warned: empty raid")
+    local r = makeWorld("Raidertwo", false)
+    leftover(r, 3600)
+    r.env.GetNumRaidMembers = function() return 0 end
+    r.env.GetNumPartyMembers = function() return 0 end
+    r.env.GetRaidRosterInfo = function() return nil end
+    r.env.GetLootMethod = function() return "freeforall" end
+    local rshown = popups(r)
+    r.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(r)
+    eq(#rshown, 0, "not ours: nothing")
+end)
+
+test("roster check: a normal login warns nothing", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    local shown = engageML(w)
+    w.env.GetNumRaidMembers = function() return 2 end
+    local list = popups(w)
+    w.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(w)
+    check(not has(list, "WEIRDLOOT_ROSTER_NAMES") and not has(list, "WEIRDLOOT_ROSTER_EMPTY"), "no warning")
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "the prompt asked at once, as before")
+end)
+
 test("ml-prompt: Keep lands authority and runs the deferred snapshot broadcast", function()
     local w = makeWorld("Promotee", false)
     leftover(w, 3600)

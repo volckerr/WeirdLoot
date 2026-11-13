@@ -118,6 +118,9 @@ function addon:RouteLootSlots()
     -- the greens in the corpse with no word
     local deerGone = deer and not deerIdx and session.deer
     local firstGreen, blues = nil, {}
+    -- which slots this pass handed to whom: a full-bags refusal names no one, so the check after it looks
+    -- at which of these stayed on the corpse (UI_ERROR_MESSAGE in Disenchant.lua)
+    self._routeAt, self._deerSentSlots, self._mlSentSlots = GetTime(), {}, {}
 
     for slot = 1, GetNumLootItems() do
         -- a slot the observer just assigned to a phantom-send target is spoken for
@@ -150,17 +153,22 @@ function addon:RouteLootSlots()
                     blues[#blues + 1] = slot                      -- a blue with nobody chosen yet: see below
                 else
                     target = deerIdx                              -- non-epic BoE -> the disenchanter
-                    self._deerSentAt, self._deerSentTo = GetTime(), deer   -- a full-bag refusal names them
+                    self._deerSentTo = deer
+                    self._deerSentSlots[#self._deerSentSlots + 1] = slot
                 end
             end
             if target then
+                if target == selfIdx and target ~= deerIdx then self._mlSentSlots[#self._mlSentSlots + 1] = slot end
                 GiveMasterLoot(slot, target)
             end
         end
     end
     -- blues ride with the greens: they wait for the box when it opens, else go to the ML
     if not firstGreen then
-        for _, slot in ipairs(blues) do GiveMasterLoot(slot, selfIdx) end
+        for _, slot in ipairs(blues) do
+            self._mlSentSlots[#self._mlSentSlots + 1] = slot
+            GiveMasterLoot(slot, selfIdx)
+        end
     end
     if firstGreen and self.PromptGreensDisenchanter then
         if deerGone then self:Print(deerGone .. " can't take loot right now (offline or too far): choose who takes greens.") end

@@ -383,21 +383,68 @@ function addon:PromptGreensDisenchanter(itemId, link, gone)
     f:Show()
 end
 
--- The server refused a green we just handed the disenchanter: their bags are full. The greens stay in the
--- corpse, so say so and ask who takes greens instead (they may clear space and be picked again).
+-- A full-bags refusal names no one, and one loot pass sends to the disenchanter and to the ML at once. So
+-- wait a beat for the slots that did go out to clear, then blame whoever's items are still on the corpse.
+local REFUSAL_SETTLE = 0.5
+local refusalTimer = CreateFrame("Frame")
+refusalTimer:Hide()
+refusalTimer:SetScript("OnUpdate", function()
+    if not addon._refusalAt or GetTime() < addon._refusalAt then return end
+    addon._refusalAt = nil
+    refusalTimer:Hide()
+    addon:ResolveLootRefusal()
+end)
+
 function addon:UI_ERROR_MESSAGE(msg)
-    if msg ~= ERR_LOOT_MASTER_INV_FULL or not self._deerSentAt then return end
-    if GetTime() - self._deerSentAt > 2 then return end
-    local who = self._deerSentTo
-    self._deerSentAt = nil
-    if self._greensPrompt and self._greensPrompt:IsShown() then return end   -- one ask per refused batch
-    self:Print((who or "The disenchanter") .. "'s bags are full: the greens stay in the corpse. Choose who takes greens.")
-    local session = self:GetCurrentSession()
-    session.deer, session.deerSelf = nil, nil   -- greens wait in the corpse for a new choice (Keep included)
-    self:SendDEWatch()
-    if who then
-        session.deBags = session.deBags or {}
-        session.deBags[util:NormalizeKey(who)] = 0
+    if msg ~= ERR_LOOT_MASTER_INV_FULL and msg ~= ERR_LOOT_MASTER_UNIQUE_ITEM then return end
+    local routed = self._routeAt and GetTime() - self._routeAt <= 2
+    local sending = self.lootObs and next(self.lootObs.assigning or {})
+    if not routed and not sending then return end
+    self._refusalMsgs = self._refusalMsgs or {}
+    self._refusalMsgs[msg] = true
+    self._refusalAt = GetTime() + REFUSAL_SETTLE   -- one check per refused batch
+    refusalTimer:Show()
+end
+
+local function stuck(self, slots)
+    local obs = self.lootObs
+    for _, slot in ipairs(slots or {}) do
+        local s = obs and obs.slots and obs.slots[slot]
+        if s and not s.cleared then return true end
     end
-    self:PromptGreensDisenchanter(nil, nil, who and (who .. "'s bags are full.") or nil)
+    return false
+end
+
+-- The disenchanter's greens stayed: their bags are full, so say so and ask who takes greens instead (they
+-- may clear space and be picked again). Only our own items stayed: our bags are full, nothing to choose.
+function addon:ResolveLootRefusal()
+    local deerSlots, mlSlots, who = self._deerSentSlots, self._mlSentSlots, self._deerSentTo
+    local msgs = self._refusalMsgs or {}
+    self._routeAt, self._deerSentSlots, self._mlSentSlots, self._refusalMsgs = nil, nil, nil, nil
+    -- corpse sends (a unique for a winner or a disenchanter) still on the corpse were refused
+    local obs = self.lootObs
+    local why = (msgs[ERR_LOOT_MASTER_UNIQUE_ITEM] and not msgs[ERR_LOOT_MASTER_INV_FULL]) and "already has one"
+        or (msgs[ERR_LOOT_MASTER_INV_FULL] and not msgs[ERR_LOOT_MASTER_UNIQUE_ITEM]) and "bags full" or "can't take it"
+    for slot, a in pairs(obs and obs.assigning or {}) do
+        local s = obs.slots and obs.slots[slot]
+        if s and not s.cleared then
+            obs.assigning[slot] = nil
+            self:OnCorpseSendRefused(a.lotId, a.target, why)
+        end
+    end
+    if not msgs[ERR_LOOT_MASTER_INV_FULL] then return end
+    if stuck(self, deerSlots) then
+        if self._greensPrompt and self._greensPrompt:IsShown() then return end
+        self:Print((who or "The disenchanter") .. "'s bags are full: the greens stay in the corpse. Choose who takes greens.")
+        local session = self:GetCurrentSession()
+        session.deer, session.deerSelf = nil, nil   -- greens wait in the corpse for a new choice (Keep included)
+        self:SendDEWatch()
+        if who then
+            session.deBags = session.deBags or {}
+            session.deBags[util:NormalizeKey(who)] = 0
+        end
+        self:PromptGreensDisenchanter(nil, nil, who and (who .. "'s bags are full.") or nil)
+    elseif stuck(self, mlSlots) then
+        self:Print("Your bags are full: your items stay in the corpse.")
+    end
 end

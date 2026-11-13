@@ -2152,6 +2152,7 @@ function addon:BannerNoWinnerItem(roll, deTo)
         item.deToClass = getPlayerClassName(self, util:NormalizeKey(deTo))
     elseif itemId and self.DisenchantCandidates then
         item.deCandidates, item.deNeed = self:DisenchantCandidates(itemId)
+        if self.MarkCantHold then self:MarkCantHold(item.deCandidates, itemId) end
         item.onDisenchant = function(who) self:SendForDisenchant(lotId, who) end
         local cands = item.deCandidates
         item.getDEDefault = function() return self:DisenchantDefault(cands) end   -- read at click time
@@ -2315,8 +2316,11 @@ function addon:AwardLootCouncilCopy(lotId, winner, forDE)
             self.phantomSends = self.phantomSends or {}
             self.phantomSends[lotId] = { itemId = lot.itemId, target = winner }
             self:ShowPhantomSendCard(lotId)
-            if self.lootObs and self.lootObs.open then self:TryPhantomSends() end
-            self:Print("Re-open the corpse to send the item to " .. winner .. ".")
+            if self.lootObs and self.lootObs.open then
+                self:TryPhantomSends()   -- the window is open: it goes out now
+            else
+                self:Print("Re-open the corpse to send the item to " .. winner .. ".")
+            end
         end
         return
     end
@@ -2352,6 +2356,14 @@ function addon:ShowPhantomSendCard(lotId)
         -- for disenchanting: "<name> to disenchant", the On Corpse tag until the pickup, and Reroll
         local item = self:BannerNoWinnerItem({ id = lotId, itemId = lot.itemId, link = link, icon = icon,
             quantity = pseudo.quantity }, deTo)
+        if send and send.refused then
+            -- refused: the reason replaces "<name> to disenchant", and the Disenchant list opens to pick again
+            item.refusedText = send.refused.who .. " can't take it (" .. send.refused.why .. ")"
+            item.deCandidates, item.deNeed = self:DisenchantCandidates(lot.itemId)
+            self:MarkCantHold(item.deCandidates, lot.itemId)
+            item.onDisenchant = function(who) self:SetPhantomSendTarget(lotId, who) end
+            item.openDE = true
+        end
         if send then
             item.onCorpse = true
             item.onReroll = function()
@@ -2369,8 +2381,9 @@ function addon:ShowPhantomSendCard(lotId)
     if send then
         item.corpseSend = true
         item.currentTarget = send.target
-        item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
+        item.candidates = self:MarkCantHold(self:LootCouncilCandidates(name, sections, lot.itemId), lot.itemId)
         item.onAward = function(who) self:SetPhantomSendTarget(lotId, who) end
+        if send.refused then item.refusedText = send.refused.who .. " can't take it (" .. send.refused.why .. ")" end
         if not self:HasDeadCreatureTarget() then
             item.onForgive = function() self:ConfirmForgivePhantom(lotId) end
         end

@@ -498,6 +498,7 @@ function addon:RecheckLootAuthority()
 end
 
 function addon:PLAYER_ENTERING_WORLD()
+    self:ArmRosterCheck()               -- this server sometimes logs us in with no raid roster
     self:RefreshAll()
     if self:IsAuthorizedLootMaster() then
         self:OnBagUpdate()              -- deferred while the bags re-stage; that pass drops items whose trade window lapsed while away
@@ -585,7 +586,13 @@ end
 function addon:HandleSlashCommand(msg)
     local command = string.lower(string.trim(msg or ""))
     if command == "start" then
-        self:StartLootSession()
+        if self._mlPromptPending then
+            -- the fresh-session prompt holds authority until answered: /wl start is its Start Fresh
+            StaticPopup_Hide("WEIRDLOOT_FRESH_SESSION_ON_ML")
+            self:AnswerFreshSessionOnML(true)
+        else
+            self:StartLootSession()
+        end
     elseif command == "winners" or command == "winner" or command == "export winners" or command == "export winner" then
         self:ExportWinners()
     elseif command == "log" or command == "export log" then

@@ -206,12 +206,14 @@ function addon:OnUniqueBlockedSlot(slot, itemId, link)
     self._lootObsSeen[seenKey] = true
 
     -- The seen mark is memory only: after a reload, re-opening the corpse would mint the same copy again.
-    -- A phantom of this item not yet handed out (open, rolling, or owed off the corpse) is that copy.
-    -- ponytail: two corpses each holding this same Unique at once would share one lot; key by corpse if seen.
+    -- A phantom of this item from THIS corpse not yet handed out (open, rolling, or owed off the corpse) is
+    -- that copy; another corpse's copy is a new drop. A lot minted before corpses were recorded matches any.
+    local corpse = obs and obs.corpseGuid
     local core = self.lootCore
     if core then
         for _, lot in ipairs(core:All()) do
-            if lot.phantom and lot.itemId == itemId and not lot.removed then
+            if lot.phantom and lot.itemId == itemId and not lot.removed
+                and (not lot.corpse or not corpse or lot.corpse == corpse) then
                 local live = lot.state ~= core.STATE.RESOLVED
                 for _, a in ipairs(lot.awards or {}) do
                     if a.state == core.AWARD.OWED then live = true end
@@ -225,6 +227,7 @@ function addon:OnUniqueBlockedSlot(slot, itemId, link)
     self:LootAlert(shown .. " is a Unique you already hold: it CANNOT enter your bags and stays on the corpse. It rolls now; re-open the corpse afterwards to send it to the winner.")
     if self.lootCore then
         local lot = self.lootCore:MintPhantom(itemId, 1)
+        if lot and corpse then lot.corpse = corpse end   -- whose copy it is: the guard above, and the send
         self.lootCore:Flush()   -- see WarnMissingQuestDrops: a bare mint is invisible until flushed
     end
 end
@@ -347,11 +350,14 @@ function addon:PLAYER_TARGET_CHANGED()
     end
 end
 
--- ponytail: matched by item id only; 3.3.5 cannot name a loot window's corpse (the target is a guess), so
--- the same pure-Unique pending on two corpses at once fulfills from whichever is opened first.
-function addon:PhantomSendForItem(itemId)
+-- The pending send for this item on this corpse (the target's GUID when the window opened). A send whose lot
+-- has no corpse recorded (older lots, chests) matches any window holding the item.
+function addon:PhantomSendForItem(itemId, corpse)
+    local core = self.lootCore
     for lotId, send in pairs(self.phantomSends or {}) do
-        if send.itemId == itemId then
+        local lot = core and core:Get(lotId)
+        local from = lot and lot.corpse
+        if send.itemId == itemId and (not from or not corpse or from == corpse) then
             return lotId, send
         end
     end
@@ -364,7 +370,7 @@ function addon:TryPhantomSends()
     if not obs or not next(self.phantomSends or {}) then return end
     for slot, s in pairs(obs.slots) do
         if not s.cleared and not obs.assigning[slot] and not self.AUTOLOOT_NEVER[s.itemId] then
-            local lotId, send = self:PhantomSendForItem(s.itemId)
+            local lotId, send = self:PhantomSendForItem(s.itemId, obs.corpseGuid)
             if lotId then
                 local idx = self:FindMasterLootCandidate(send.target)
                 if idx then
@@ -396,11 +402,57 @@ function addon:OnPhantomSendCleared(lotId, target)
     if self.RefreshRollsLeftBanner then self:RefreshRollsLeftBanner() end   -- on-corpse header may clear now
 end
 
+-- Who the server refused an item of this kind to this session ("already has one" or "bags full"), so the
+-- send flyouts grey them out for it.
+function addon:CantHoldReason(itemId, who)
+    local t = (self:GetCurrentSession().cantHold or {})[tostring(itemId)]
+    return t and t[util:NormalizeKey(who or "")]
+end
+
+function addon:MarkCantHold(list, itemId)
+    for _, c in ipairs(list or {}) do c.blocked = self:CantHoldReason(itemId, c.name) end
+    return list
+end
+
+-- ML: the server refused a corpse send to `who`. Say who and why, remember it for this item, and reopen the
+-- card with its send list so another pick is one click.
+function addon:OnCorpseSendRefused(lotId, who, why)
+    local core = self.lootCore
+    local lot = core and core:Get(lotId)
+    local send = self.phantomSends and self.phantomSends[lotId]
+    if not lot or not send then return end
+    local session = self:GetCurrentSession()
+    session.cantHold = session.cantHold or {}
+    local k = tostring(lot.itemId)
+    session.cantHold[k] = session.cantHold[k] or {}
+    session.cantHold[k][util:NormalizeKey(who)] = why
+    if why == "bags full" then
+        session.deBags = session.deBags or {}
+        session.deBags[util:NormalizeKey(who)] = 0
+    end
+    send.refused = { who = who, why = why }
+    local _, link = util:ItemRender(lot.itemId)
+    self:Print(who .. " can't take " .. (link or "the item") .. " (" .. why .. "): it stays on the corpse. Pick someone else on its card.")
+    if self.ShowPhantomSendCard then self:ShowPhantomSendCard(lotId) end
+end
+
 -- ML retargets a pending send from the win card's flyout; assigns immediately if the window is open.
 function addon:SetPhantomSendTarget(lotId, target)
     local send = self.phantomSends and self.phantomSends[lotId]
     if not send or not target or target == "" then return end
-    send.target = target
+    -- the owed award follows the send, or the delivery to the new target would never be recorded
+    if send.target ~= target and self.lootCore then self.lootCore:RetargetAward(lotId, send.target, target) end
+    local session = self:GetCurrentSession()
+    if session.deLots and session.deLots[lotId] then
+        session.deLots[lotId], session.deDefault = target, target
+        if self.SendDEWatch then self:SendDEWatch() end
+        local lot = self.lootCore and self.lootCore:Get(lotId)
+        local _, link = util:ItemRender(lot and lot.itemId)
+        if self.payout and target ~= send.target then
+            self.payout:_whisper(target, (link or "An item") .. " is coming to you to disenchant.")
+        end
+    end
+    send.target, send.refused = target, nil
     if self.lootObs and self.lootObs.open then self:TryPhantomSends() end
     if self.ShowPhantomSendCard then self:ShowPhantomSendCard(lotId) end
 end

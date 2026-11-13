@@ -220,6 +220,26 @@ H.test("blocked unique: a reload and re-open does not mint the copy again", func
     H.eq(n, 1, "still one phantom for the copy on the corpse")
 end)
 
+H.test("blocked unique: the same Unique on a second corpse is a new drop, and its send stays with its own corpse", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    captureAlerts(w)
+    w.addon.PlayerHoldsItem = function(self, id) return id == UNIQUE_ID end
+    w.addon.IsItemPureUnique = function(self, id) return id == UNIQUE_ID end
+    mockLootWindow(w, { { itemId = UNIQUE_ID, bind = "bop" } }, OTHER_GUID, { "Masterlooter", "Halricb" })
+    w.addon:LOOT_OPENED()
+    local first = w.addon.lootCore:openPhantomLotForItem(UNIQUE_ID)
+    w.addon:StartLiveRoll(first.id)                -- the first copy is still rolling (or owed off its corpse)
+    local given = mockLootWindow(w, { { itemId = UNIQUE_ID, bind = "bop" } }, "0xF1300012340009FA", { "Masterlooter", "Halricb" })
+    w.addon:LOOT_OPENED()
+    local n = 0
+    for _, l in ipairs(w.addon.lootCore:All()) do if l.itemId == UNIQUE_ID and l.phantom then n = n + 1 end end
+    H.eq(n, 2, "the second corpse's copy gets its own lot")
+    w.addon.phantomSends = { [first.id] = { itemId = UNIQUE_ID, target = "Halricb" } }
+    w.addon:LOOT_CLOSED(); w.addon:LOOT_OPENED()   -- the second corpse again
+    H.eq(#given, 0, "the first copy's send does not take the second corpse's item")
+end)
+
 H.test("unblocked BoP still self-assigns (the skip is unique-specific)", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
@@ -423,7 +443,7 @@ H.test("greens: the disenchanter's bags are full -> told, and asked who takes gr
     mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
     w.addon:LOOT_OPENED()
     w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
-    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full"); F.advanceClock(1); H.pump(w, 1.0)
     H.eq(asked, "Halricb's bags are full.", "asked again, naming Halricb")
     H.eq(w.addon:GetCurrentSession().deer, nil, "greens wait for a new choice")
     H.eq(w.addon:DisenchanterFreeSlots("Halricb"), 0, "the box shows Halricb at 0 free")
@@ -438,12 +458,12 @@ H.test("greens: picking the same full disenchanter again is refused again -> ask
     local given = mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 } }, OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
     w.addon:LOOT_OPENED()
     w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
-    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full"); F.advanceClock(1); H.pump(w, 1.0)
     H.eq(asked, 1, "first refusal: asked")
     w.addon:SetGreensDisenchanter("Halricb", true)   -- the box's row click: pick him again...
     w.addon:RouteLootSlots()                         -- ...and the waiting greens go out at once
     H.eq(#given, 2, "sent to him again")
-    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full"); F.advanceClock(1); H.pump(w, 1.0)
     H.eq(asked, 2, "second refusal: asked again")
 end)
 
@@ -457,11 +477,48 @@ H.test("greens: Keep greens myself with the ML's own bags full -> asked, and gre
     w.addon:LOOT_OPENED()
     H.eq(given[1] and given[1].idx, 1, "Keep: the green goes to the ML")
     w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
-    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full"); F.advanceClock(1); H.pump(w, 1.0)
     H.eq(asked, "Masterlooter's bags are full.", "asked, naming the ML")
     H.eq(w.addon:GetCurrentSession().deerSelf, nil, "Keep is off until a new choice")
     w.addon:LOOT_OPENED()
     H.eq(#given, 1, "re-opening the corpse sends nothing more to the full ML")
+end)
+
+H.test("refusal: the disenchanter's greens went out, only the ML's epic bounced -> the ML's bags, no box", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked
+    w.addon.PromptGreensDisenchanter = function(self, itemId, link, who) asked = who or true end
+    local said
+    w.addon.Print = function(self, msg) said = msg end
+    w.addon:SetGreensDisenchanter("Halricb", true)
+    mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 }, { itemId = 50005, bind = "bop", quality = 4 } },
+        OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    w.addon:LOOT_SLOT_CLEARED(1)                      -- the green reached Halricb
+    w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")   -- the epic to the ML bounced
+    H.eq(asked, nil, "not asked yet: waiting for the slots to settle")
+    F.advanceClock(1); H.pump(w, 1.0)
+    H.eq(asked, nil, "Halricb not blamed")
+    H.eq(w.addon:GetCurrentSession().deer, "Halricb", "Halricb stays the disenchanter")
+    H.eq(said, "Your bags are full: your items stay in the corpse.", "told it is our own bags")
+end)
+
+H.test("refusal: both bounced -> the disenchanter is blamed (the box asks again)", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local asked
+    w.addon.PromptGreensDisenchanter = function(self, itemId, link, who) asked = who or true end
+    w.addon:SetGreensDisenchanter("Halricb", true)
+    mockLootWindow(w, { { itemId = 36486, bind = "boe", quality = 2 }, { itemId = 50005, bind = "bop", quality = 4 } },
+        OTHER_GUID, { "Masterlooter", "Halricb" }, "Kologarn")
+    w.addon:LOOT_OPENED()
+    w.env.ERR_LOOT_MASTER_INV_FULL = "That player's inventory is full"
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    w.addon:UI_ERROR_MESSAGE("That player's inventory is full")
+    F.advanceClock(1); H.pump(w, 1.0)
+    H.eq(asked, "Halricb's bags are full.", "Halricb's green stayed: asked")
 end)
 
 -- Fragment of Val'anyr is BoP legendary, so every branch below would otherwise route it to the ML.
@@ -556,6 +613,44 @@ H.test("winner not a candidate at the corpse: no assign, send stays pending for 
     w.addon:SetPhantomSendTarget(lot.id, "Lexissa")
     H.eq(#given, 1, "retarget assigns immediately while the window is open")
     H.eq(given[1].idx, 2, "assigned to the new target")
+end)
+
+H.test("corpse send refused (already has one): told, remembered, card reopened; a new pick sends and is recorded", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    captureAlerts(w)
+    local core = w.addon.lootCore
+    w.addon.PlayerHoldsItem = function(self, id) return id == UNIQUE_ID end
+    w.addon.IsItemPureUnique = function(self, id) return id == UNIQUE_ID end
+    local cards = {}
+    w.addon.AddLootBannerItem = function(self, item) cards[#cards + 1] = item; return true end
+    local said
+    w.addon.Print = function(self, msg) said = msg end
+    local given = mockLootWindow(w, { { itemId = UNIQUE_ID, bind = "bop" } }, OTHER_GUID, { "Masterlooter", "Dravekc", "Halricb" })
+    w.addon:LOOT_OPENED()
+    local lot = core:openPhantomLotForItem(UNIQUE_ID)
+    w.addon:StartLiveRoll(lot.id)
+    w.addon:ResolveLiveRoll(lot.id)
+    w.addon:SendForDisenchant(lot.id, "Dravekc")
+    H.eq(#given, 1, "sent at once: the window is open")
+    w.env.ERR_LOOT_MASTER_UNIQUE_ITEM = "Player has too many of that item already"
+    w.addon:UI_ERROR_MESSAGE("Player has too many of that item already")
+    F.advanceClock(1); H.pump(w, 1.0)
+    local send = w.addon.phantomSends[lot.id]
+    H.eq(send and send.refused and send.refused.why, "already has one", "the refusal is on the send")
+    H.check(said and said:find("Dravekc can't take", 1, true) and said:find("already has one", 1, true), "chat names who and why: " .. tostring(said))
+    H.eq(w.addon:CantHoldReason(UNIQUE_ID, "Dravekc"), "already has one", "remembered for this item")
+    local card = cards[#cards]
+    H.eq(card.refusedText, "Dravekc can't take it (already has one)", "the card says why")
+    H.check(card.openDE, "the card opens its list")
+    w.addon:SetPhantomSendTarget(lot.id, "Halricb")
+    H.eq(#given, 2, "the new pick goes out at once")
+    H.eq(given[2].idx, 3, "to Halricb")
+    H.eq(w.addon:DisenchantTarget(lot.id), "Halricb", "the disenchant mark follows")
+    w.addon:LOOT_SLOT_CLEARED(1)
+    local a = core:Get(lot.id).awards[1]
+    H.eq(a.state, core.AWARD.DELIVERED, "delivered")
+    H.eq(a.recipient, "Halricb", "recorded for Halricb")
 end)
 
 F.endSuite()

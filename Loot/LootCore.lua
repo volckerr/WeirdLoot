@@ -605,6 +605,21 @@ function LootCore:UnlockAll()
 end
 
 -- Mark one owed award delivered. Low-level: by lot id + award index.
+-- An OWED award goes to someone else instead (a corpse send the first pick could not take).
+function LootCore:RetargetAward(id, from, to)
+    local lot = self.lots[id]; if not lot or not lot.awards or not to or to == "" then return false end
+    for i = 1, #lot.awards do
+        local a = lot.awards[i]
+        if a.state == AWARD.OWED and a.winner == from then
+            a.winner = to
+            self:log("retarget", { id = id, itemId = lot.itemId, from = from, to = to, awardIndex = i })
+            self:emit("ledgerChanged")
+            return true
+        end
+    end
+    return false
+end
+
 function LootCore:MarkDelivered(id, awardIndex, recipient, when)
     local lot = self.lots[id]; if not lot or not lot.awards then return false end
     local a = lot.awards[awardIndex]
