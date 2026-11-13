@@ -804,6 +804,7 @@ local function formatLootRuleEntry(entry)
     if not entry then
         return ""
     end
+    if entry.isLootCouncil then return "LC" end
     if entry.isRest then
         return "Rest"
     end
@@ -1812,6 +1813,8 @@ function addon:GetLiveItemPrio(item)
         -- Resolution is untouched: the spec rule still decides if every named raider passes.
         if specText and specText ~= "" and countNamedEntries(namedRule) <= MAX_NAMES_WITH_SPECS then
             parts[#parts + 1] = specText
+        elseif not hasLootCouncil and self:RuleHasLootCouncil(lootRule) then
+            parts[#parts + 1] = "LC"   -- the hidden spec tail ends in LC: the council still has the last say
         end
         if hasLootCouncil then parts[#parts + 1] = "LC" end
     elseif specText and specText ~= "" then

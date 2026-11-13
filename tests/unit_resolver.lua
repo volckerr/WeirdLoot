@@ -622,7 +622,9 @@ test("one paste provides both: spec tokens in the named list become spec rules, 
     H.notNil(named, "a named rule was made")
     H.notNil(spec, "a spec rule was made from the same line")
     eq(named.tiers[1].entries[1].playerKey, "curatewf", "the raider is a named entry")
-    eq(#named.tiers, 2, "the name tier and the LC tier; the spec tier is not one of them")
+    eq(#named.tiers, 1, "the name tier only: LC follows the specs, so it is the spec rule's")
+    eq(#spec.tiers, 2, "the spec tier, then LC")
+    H.check(spec.tiers[2].entries[1].isLootCouncil, "LC ends the spec rule")
     eq(spec.tiers[1].entries[1].className, "shaman", "the spec half landed in the spec rule")
     eq(strip(w.addon:GetLiveItemPrio({ name = "Ironmender" })),
        "Curatewf > Restoration Shaman / Restoration Druid > LC", "and both halves reach the popup")
@@ -693,6 +695,42 @@ test("display: the spec tail is dropped past two named raiders, but still decide
     w.addon:SaveNamedItemsText("Ironmender, Alpha / Bravo > shaman restoration > LC", true)
     eq(strip(w.addon:GetLiveItemPrio({ name = "Ironmender" })), "Alpha / Bravo > Restoration Shaman > LC",
        "two names, so the spec tier is shown")
+end)
+
+local function councilOrWinners(w, lot)
+    local L = w.addon.lootCore:Get(lot.id)
+    if L.record and L.record.isLootCouncil then return "LC" end
+    local out = {}
+    for _, a in ipairs(L.awards or {}) do out[#out + 1] = a.winner end
+    return table.concat(out, ",")
+end
+
+test("spec list ending in LC (10-man Reply-Code: hunter > LC): a hunter wins; with no hunter the council decides", function()
+    local profiles = { gorg = { className = "Warrior", specName = "Arms" }, hunt = { className = "Hunter", specName = "Marksmanship" } }
+    local w, lot = setupResolver(46052, 1, profiles, { gorg = 90, hunt = 20 })
+    resolveWith(w, lot, { { "Gorg", "ms" }, { "Hunt", "ms" } })
+    eq(councilOrWinners(w, lot), "Hunt", "the hunter wins, though outrolled")
+    w, lot = setupResolver(46052, 1, profiles, { gorg = 90 })
+    resolveWith(w, lot, { { "Gorg", "ms" } })
+    eq(councilOrWinners(w, lot), "LC", "no hunter: loot council")
+    eq(strip(w.addon:GetLiveItemPrio({ name = "Reply-Code Alpha", itemId = 46052 })), "Hunter > LC", "shown in order")
+end)
+
+test("names, then specs, then LC: each gets its turn in that order", function()
+    local profiles = {
+        curatewf = { className = "Priest", specName = "Holy" },
+        sham = { className = "Shaman", specName = "Restoration" },
+        gorg = { className = "Warrior", specName = "Arms" },
+    }
+    local function run(regs, rolls)
+        local w, lot = setupResolver(40005, 1, profiles, rolls)
+        w.addon:SaveNamedItemsText(w.addon.util:ItemRender(40005) .. ", Curatewf > shaman restoration > LC", true)
+        resolveWith(w, lot, regs)
+        return councilOrWinners(w, lot)
+    end
+    eq(run({ { "Curatewf", "ms" }, { "Sham", "ms" } }, { curatewf = 5, sham = 99 }), "Curatewf", "the named raider first")
+    eq(run({ { "Sham", "ms" }, { "Gorg", "ms" } }, { sham = 5, gorg = 99 }), "Sham", "then the spec, before LC")
+    eq(run({ { "Gorg", "ms" } }, { gorg = 99 }), "LC", "then the council")
 end)
 
 F.endSuite()
