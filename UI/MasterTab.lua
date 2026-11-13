@@ -101,9 +101,16 @@ function addon:BuildMasterTab()
         addon:RefreshMasterTab()
     end)
 
+    -- Who gets this session's greens (per session, so it sits with the session controls). Choose opens the
+    -- same box the first green does.
+    local deerLabel = createLabel(panel, "", "TOPLEFT", startButton, "BOTTOMLEFT", 0, -14)
+    local deerButton = createButton(panel, "Choose disenchanter", 150, 22)
+    deerButton:SetPoint("LEFT", deerLabel, "RIGHT", 12, 0)
+    deerButton:SetScript("OnClick", function() addon:PromptGreensDisenchanter() end)
+
     -- Section 3: Import/Export Controls. Exports are open to everyone (raiders render results from
     -- the synced ledger); the import/broadcast buttons stay ML-gated by the refresh below.
-    local ioHeader, ioDivider = makeSectionHeader("Import/Export Controls", startButton, "BOTTOMLEFT", -16)
+    local ioHeader, ioDivider = makeSectionHeader("Import/Export Controls", deerLabel, "BOTTOMLEFT", -22)
 
     local exportWinnersButton = createButton(panel, "Export Winners", 110, 24)
     exportWinnersButton:SetPoint("TOPLEFT", ioDivider, "BOTTOMLEFT", 0, -8)
@@ -209,6 +216,8 @@ function addon:BuildMasterTab()
     panel.snapshot:SetWidth(900)
     panel.snapshot:SetJustifyV("TOP")
 
+    panel.deerLabel = deerLabel
+    panel.deerButton = deerButton
     self.ui.masterPanel = panel
 end
 
@@ -251,6 +260,13 @@ function addon:RefreshMasterTab()
 
     -- Named items are LC decisions, so leadership (roster-edit rank) may hand the ML a list
     -- without holding loot authority; the receive gate in Comm mirrors this.
+    local session = self:GetCurrentSession()
+    local deerText = session.deer and ("|cfff58cba" .. session.deer .. "|r")
+        or (session.deerSelf and util:ColorPlayerName(util:GetPlayerName("player"))) or "|cff9a9384not chosen yet (asked on the first green)|r"
+    local holder = session.deer and not self:CanDisenchantGreens(session.deer)
+    panel.deerLabel:SetText("|cffffd200" .. (holder and "Greens to:" or "Disenchanter:") .. "|r " .. deerText)
+    if authorized and session.active then panel.deerButton:Enable() else panel.deerButton:Disable() end
+
     if self:CanEditRoster() then
         panel.importNamedItemsButton:Enable()
         panel.broadcastNamedItemsButton:Enable()

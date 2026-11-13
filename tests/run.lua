@@ -92,6 +92,22 @@ test("session start baselines existing loot as idle (no auto-roll)", function()
     check(w.addon.lootCore:State(lot.id) ~= "pending", "not auto-surfaced")
 end)
 
+test("a drop of an item the ML already carries surfaces on its own; the carried copy stays idle", function()
+    local w = makeWorld("Masterlooter", true)
+    setBag(w, 40001, 1)             -- carried into the session
+    startSession(w)
+    setBag(w, 40001, 2)             -- the same item drops again
+    bagUpdate(w)
+    local idle, surfaced = 0, 0
+    for _, l in ipairs(w.addon.lootCore:lotsForItem(40001)) do
+        if l.state == "idle" then idle = idle + l.count end
+        if l.state == "pending" then surfaced = surfaced + l.count end
+    end
+    eq(idle, 1, "the carried copy is still idle")
+    eq(surfaced, 1, "the new drop is surfaced for rolling, not hidden in the idle lot")
+    eq(#w.addon.lootView.items, 2, "both show in the loot list")
+end)
+
 test("fresh drop mints a NEW lot and auto-surfaces (pending)", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
@@ -184,6 +200,79 @@ test("ML reload mid-roll: a roll whose end passed during the reload resolves at 
     eq(w.addon.lootCore:Get(lot.id).awards[1].winner, "Alice", "with the pick made before the reload")
     w.addon:SyncRollPopups()
     eq(w.addon.session.rollEnds[lot.id], nil, "and its recorded end is pruned")
+end)
+
+test("new session: the ML drops the old ledger's rolls, cards and roll ends (lot ids are reused)", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 40005, 1); bagUpdate(w)
+    local lot = openLot(w, 40005)
+    w.addon:StartLiveRoll(lot.id)
+    local closedBefore = #w.addon._rollBannerClosed
+    F.advanceClock(20)
+    startSession(w)
+    eq(next(w.addon.live.rolls), nil, "no live roll survives the new session")
+    eq(next(w.addon.session.rollEnds), nil, "nor a recorded roll end")
+    check(#w.addon._rollBannerClosed > closedBefore, "the old roll's card was closed")
+    local idle = openLot(w, 40005)
+    eq(idle and idle.id, lot.id, "the carried copy baselines idle under the same lot id")
+    w.addon:StartLiveRoll(idle.id)
+    local r = w.addon.live.rolls[idle.id]
+    check(r and r.owner, "rolling that lot gives the ML a new owner roll")
+    eq(math.floor(r.deadline - w.env.GetTime() + 0.5), r.duration, "with a full timer, not the old end")
+end)
+
+test("new epoch on a raider: a handoff keeps rolls and win cards, a new session drops them", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    startSession(ml)
+    setBag(ml, 40004, 1); setBag(ml, 40005, 1); bagUpdate(ml)
+    local won, rolling = openLot(ml, 40004), openLot(ml, 40005)
+    ml.addon:StartLiveRoll(won.id)
+    ml.addon:RegisterInterest(won.id, "Raidertwo", "ms")
+    ml.addon:ResolveLiveRoll(won.id)
+    ml.addon:StartLiveRoll(rolling.id)
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    check(raider.addon.live.rolls[rolling.id], "raider has the open roll")
+
+    local kept
+    raider.addon.DropStaleAwardCards = function(_, keep) kept = keep end
+    ml.addon.session.id = ml.addon:NextEpoch()            -- handoff: same ledger, new epoch
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    check(raider.addon.live.rolls[rolling.id], "a handoff keeps the open roll")
+    check(kept and kept(won.id), "and the win card of the awarded lot")
+
+    startSession(ml)                                       -- new session: both copies baseline idle
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    eq(raider.addon.live.rolls[rolling.id], nil, "a new session drops the old roll")
+    check(not kept(won.id), "and the old win card")
+end)
+
+test("ending the session reaches raiders: their session ends and the old rolls and cards go", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local raider = makeWorld("Raidertwo", false)
+    startSession(ml)
+    setBag(ml, 40004, 1); setBag(ml, 40005, 1); bagUpdate(ml)
+    local won, rolling = openLot(ml, 40004), openLot(ml, 40005)
+    ml.addon:StartLiveRoll(won.id)
+    ml.addon:RegisterInterest(won.id, "Raidertwo", "ms")
+    ml.addon:ResolveLiveRoll(won.id)
+    ml.addon:StartLiveRoll(rolling.id)
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(raider)
+    check(raider.addon.session.active and raider.addon.live.rolls[rolling.id], "raider mirrors the session and roll")
+    local kept
+    raider.addon.DropStaleAwardCards = function(_, keep) kept = keep end
+
+    clearWire()
+    ml.addon:ClearSession()
+    check(#F.WIRE > 0, "ending the session sends the raid a snapshot")
+    flushWireTo(raider)
+    eq(raider.addon.session.active, false, "the raider's session ends")
+    eq(raider.addon.live.rolls[rolling.id], nil, "its open roll goes")
+    check(kept and not kept(won.id), "and its win cards")
+    eq(#raider.addon.lootCore:All(), 0, "and its ledger mirror is empty")
 end)
 
 test("top-N: 2x drop, 3 rollers -> 2 distinct owed winners", function()
@@ -1046,6 +1135,50 @@ test("payout stays in sync live: an owed copy leaving the bags forgives the owe 
     eq(owedCount(w), 1, "owed while held")
     setBag(w, 40005, 0); bagUpdate(w)               -- copy leaves bags, no trade -> core REMOVED -> awardRemoved
     eq(owedCount(w), 0, "payout forgave the owe when the core retired the award (no drift)")
+end)
+
+test("payout: two wins close together send one come-trade whisper listing both", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local whispers = {}
+    w.env.ChatThrottleLib = nil
+    w.env.SendChatMessage = function(msg, kind, _, target)
+        if kind == "WHISPER" then whispers[#whispers + 1] = { msg = msg, target = target } end
+    end
+    w.addon.payout.payoutActive = true
+    w.addon.payout:Owe("Alice", 40005, 1, "|cffffffff|Hitem:40005|h[Blade]|h|r")
+    F.pump(w, 1.0)
+    w.addon.payout:Owe("Alice", 40006, 1, "|cffffffff|Hitem:40006|h[Shield]|h|r")
+    F.pump(w, 1.5)
+    eq(#whispers, 0, "still waiting: the second win restarted the delay")
+    F.pump(w, 1.0)
+    eq(#whispers, 1, "one whisper once the wins stop")
+    check(whispers[1].target == "Alice" and whispers[1].msg:find("[Blade]", 1, true)
+        and whispers[1].msg:find("[Shield]", 1, true), "it lists both items")
+    w.addon.payout:Owe("Bob", 40007, 1, "|cffffffff|Hitem:40007|h[Ring]|h|r")
+    w.addon.payout:Forgive("Bob", 40007)
+    F.pump(w, 4.0)
+    eq(#whispers, 1, "an owe forgiven before the whisper sends nothing")
+end)
+
+test("payout: rerolling one of two copies owed to a winner keeps the other copy owed", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    setBag(w, 40005, 1); bagUpdate(w)
+    local first = openLot(w, 40005)
+    w.addon:StartLiveRoll(first.id)
+    w.addon:RegisterInterest(first.id, "Alice", "ms")
+    w.addon:ResolveLiveRoll(first.id)
+    setBag(w, 40005, 2); bagUpdate(w)                     -- a second copy drops later: its own lot
+    local second = openLot(w, 40005)
+    check(second and second.id ~= first.id, "the second copy is a lot of its own")
+    w.addon:StartLiveRoll(second.id)
+    w.addon:RegisterInterest(second.id, "Alice", "ms")
+    w.addon:ResolveLiveRoll(second.id)
+    eq(owedCount(w), 2, "Alice is owed both copies")
+    w.addon:UnlockSessionRoll(second.id)
+    eq(owedCount(w), 1, "the reroll forgives one copy, not both")
+    eq(w.addon.lootCore:OwedCountFor("Alice"), 1, "matching the ledger")
 end)
 
 test("payout vs bags: an owe we still hold is kept", function()
@@ -3516,6 +3649,103 @@ test("ml-prompt: resolving as ML with an active session asks, and withholds auth
     eq(w.addon.session.id, "5", "session untouched while held")
 end)
 
+test("ml-prompt: a greens ask while the prompt is open waits for the answer (Keep names who is full)", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    w.addon:PromptGreensDisenchanter(nil, nil, "Dravekc's bags are full.")
+    check(not (w.addon._greensPrompt and w.addon._greensPrompt:IsShown()), "no box while authority is held")
+    dialog(w).OnCancel()
+    local f = w.addon._greensPrompt
+    check(f and f:IsShown(), "box opens on Keep")
+    eq(f and f.gone, "Dravekc's bags are full.", "with the reason")
+end)
+
+test("ml-prompt: a greens ask waiting on Start Fresh opens without the old disenchanter", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    w.addon:PromptGreensDisenchanter(nil, nil, "Dravekc's bags are full.")
+    dialog(w).OnAccept()
+    local f = w.addon._greensPrompt
+    check(f and f:IsShown(), "box opens on Start Fresh")
+    eq(f and f.gone, nil, "no reason line: the new session has no disenchanter")
+end)
+
+test("ml-prompt: /wl start while the prompt is open is its Start Fresh", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)
+    w.addon:HandleSlashCommand("start")
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
+    check(w.addon.session.id ~= "5", "a fresh session started")
+end)
+
+local function popups(w)
+    local shown = {}
+    w.env.StaticPopup_Show = function(which) shown[#shown + 1] = which; return {} end
+    w.env.StaticPopup_Hide = function(which) shown[#shown + 1] = "hide:" .. which end
+    return shown
+end
+local function has(list, v) for _, x in ipairs(list) do if x == v then return true end end return false end
+
+test("roster check: names missing -> no authority, no start-fresh prompt; warned at 10 s; both land when names arrive", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    local me = w.env.UnitName("player")
+    w.env.GetNumRaidMembers = function() return 3 end
+    w.env.GetRaidRosterInfo = function(i) if i == 1 then return me, 2 end return nil, 0 end
+    local shown = popups(w)
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), false, "no authority on half a roster")
+    check(not has(shown, "WEIRDLOOT_FRESH_SESSION_ON_ML"), "the start-fresh prompt waits")
+    F.advanceClock(11); F.pump(w)
+    check(has(shown, "WEIRDLOOT_ROSTER_NAMES"), "warned")
+    w.env.GetRaidRosterInfo = function(i) return ({ me, "Halricb", "Dravekc" })[i], (i == 1) and 2 or 0 end
+    w.addon:RefreshLootAuthority()                  -- RAID_ROSTER_UPDATE: the names arrived
+    check(has(shown, "WEIRDLOOT_FRESH_SESSION_ON_ML"), "now the prompt asks")
+    F.advanceClock(3); F.pump(w)
+    check(has(shown, "hide:WEIRDLOOT_ROSTER_NAMES"), "the warning closes by itself")
+end)
+
+test("roster check: our session's raid is empty after login -> warned; a raider's session is not", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    -- a really empty raid: no members, no master looter named anywhere
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.env.GetNumPartyMembers = function() return 0 end
+    w.env.GetRaidRosterInfo = function() return nil end
+    w.env.GetLootMethod = function() return "freeforall" end
+    local shown = popups(w)
+    w.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(w)
+    check(has(shown, "WEIRDLOOT_ROSTER_EMPTY"), "warned: empty raid")
+    local r = makeWorld("Raidertwo", false)
+    leftover(r, 3600)
+    r.env.GetNumRaidMembers = function() return 0 end
+    r.env.GetNumPartyMembers = function() return 0 end
+    r.env.GetRaidRosterInfo = function() return nil end
+    r.env.GetLootMethod = function() return "freeforall" end
+    local rshown = popups(r)
+    r.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(r)
+    eq(#rshown, 0, "not ours: nothing")
+end)
+
+test("roster check: a normal login warns nothing", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    local shown = engageML(w)
+    w.env.GetNumRaidMembers = function() return 2 end
+    local list = popups(w)
+    w.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(w)
+    check(not has(list, "WEIRDLOOT_ROSTER_NAMES") and not has(list, "WEIRDLOOT_ROSTER_EMPTY"), "no warning")
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "the prompt asked at once, as before")
+end)
+
 test("ml-prompt: Keep lands authority and runs the deferred snapshot broadcast", function()
     local w = makeWorld("Promotee", false)
     leftover(w, 3600)
@@ -3551,6 +3781,97 @@ test("ml-prompt: losing and regaining ML asks again (every time, not once per lo
     eq(w.addon:IsAuthorizedLootMaster(), false, "ML moved away")
     local shown = engageML(w)
     eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "asked again on the second gain")
+end)
+
+test("ml-prompt: the loot method leaving master and coming back (Mimiron) does not ask again", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w); dialog(w).OnCancel()
+    local master = w.env.GetLootMethod
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    eq(w.addon:IsAuthorizedLootMaster(), false, "group loot: not the ML")
+    w.env.GetLootMethod = master
+    local shown = engageML(w)
+    eq(shown, nil, "master loot back on us: no prompt")
+    eq(w.addon:IsAuthorizedLootMaster(), true, "authority back at once")
+    eq(w.addon.session.id, "5", "same session carried on")
+    w.env.GetRaidRosterInfo = function(i) return (i == 1) and "Masterlooter" or "Promotee", 0 end
+    w.addon:RefreshLootAuthority()
+    shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "a later handoff and back still asks")
+end)
+
+test("handoff mid-roll: the new ML owns the open roll with its time left, the old ML gets a raider card", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local promotee = makeWorld("Promotee", false)
+    startSession(ml)
+    setBag(ml, 40005, 1); bagUpdate(ml)
+    local lot = openLot(ml, 40005)
+    ml.addon:StartLiveRoll(lot.id)
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(promotee)
+    local mirrored = promotee.addon.live.rolls[lot.id]
+    check(mirrored and not mirrored.owner, "the promotee holds a raider roll")
+    F.advanceClock(10)
+    local left = math.floor(mirrored.deadline - promotee.env.GetTime() + 0.5)
+
+    engageML(promotee)
+    local r = promotee.addon.live.rolls[lot.id]
+    check(r and r.owner, "the new ML now owns the roll (End/Cancel, auto-end)")
+    eq(math.floor(r.deadline - promotee.env.GetTime() + 0.5), left, "with the time it had left")
+
+    local before = ml.addon.live.rolls[lot.id]
+    check(before and before.owner, "the old ML held the owner roll")
+    ml.env.GetLootMethod = function() return "master", 0, 2 end   -- master loot moved to raid2
+    ml.env.GetRaidRosterInfo = function(i) return (i == 2) and "Promotee" or "Masterlooter", 0 end
+    ml.addon:RefreshLootAuthority()
+    eq(ml.addon:IsAuthorizedLootMaster(), false, "the old ML lost authority")
+    local after = ml.addon.live.rolls[lot.id]
+    check(after and not after.owner, "and its card is a raider card now")
+end)
+
+test("handoff: once a mirror has taken over, a loot-method round trip keeps its epoch", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w)
+    w.addon._mirrorActive = true                             -- mirroring the previous ML's live session
+    local shown = engageML(w)
+    eq(shown, nil, "taking over a live mirror: no prompt")
+    local taken = w.addon.session.id
+    check(tonumber(taken) > 5, "took over under a new epoch")
+    eq(w.addon._mirrorActive, false, "and is the authority now, not a mirror")
+    local master = w.env.GetLootMethod
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    w.env.GetLootMethod = master
+    shown = engageML(w)
+    eq(shown, nil, "master loot back: no prompt")
+    eq(w.addon.session.id, taken, "and no second takeover epoch")
+end)
+
+test("ml-prompt: after a loot-method change, a handoff to another ML or leaving the raid asks again", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w); dialog(w).OnCancel()
+    local master = w.env.GetLootMethod
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    w.env.GetLootMethod = master
+    w.env.GetRaidRosterInfo = function(i) return (i == 1) and "Masterlooter" or "Promotee", 0 end
+    w.addon:RefreshLootAuthority()                           -- master loot returns, but to someone else
+    local shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "handoff in between: asked")
+    dialog(w).OnCancel()
+
+    w.env.GetLootMethod = function() return "group" end
+    w.addon:RefreshLootAuthority()
+    local raid = w.env.GetNumRaidMembers
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.addon:RefreshLootAuthority()                           -- left the raid
+    w.env.GetNumRaidMembers = raid
+    w.env.GetLootMethod = master
+    shown = engageML(w)
+    eq(shown and shown.which, "WEIRDLOOT_FRESH_SESSION_ON_ML", "left the raid in between: asked")
 end)
 
 test("ml-prompt: no active session = no prompt, authority lands at once", function()
@@ -3668,7 +3989,7 @@ end)
 -- This file's own tests ran inline above; their pass/fail counts are already folded into F.
 -- The final summary below totals everything.
 -- ===========================================================================
-local suites = { "tests/unit_util.lua", "tests/unit_config.lua", "tests/unit_guildroster.lua", "tests/unit_lootcore.lua", "tests/unit_resolver.lua", "tests/unit_iteminfo.lua", "tests/unit_preset_registry.lua", "tests/unit_bagslots.lua", "tests/unit_itemfilter.lua", "tests/unit_toc.lua", "tests/unit_version.lua", "tests/unit_perchar.lua", "tests/unit_debug.lua", "tests/unit_upcomingrolls.lua", "tests/unit_uiload.lua", "tests/unit_bannerlifetime.lua", "tests/unit_phantom.lua", "tests/unit_mlloan.lua" }
+local suites = { "tests/unit_util.lua", "tests/unit_config.lua", "tests/unit_guildroster.lua", "tests/unit_lootcore.lua", "tests/unit_resolver.lua", "tests/unit_iteminfo.lua", "tests/unit_preset_registry.lua", "tests/unit_bagslots.lua", "tests/unit_itemfilter.lua", "tests/unit_toc.lua", "tests/unit_version.lua", "tests/unit_perchar.lua", "tests/unit_debug.lua", "tests/unit_upcomingrolls.lua", "tests/unit_uiload.lua", "tests/unit_bannerlifetime.lua", "tests/unit_phantom.lua", "tests/unit_mlloan.lua", "tests/unit_disenchant.lua" }
 for _, path in ipairs(suites) do
     print(string.format("\n--- running %s ---", path))
     local ok, err = pcall(dofile, path)

@@ -451,6 +451,10 @@ end
 function addon:AssumeLootMasterSession()
     if not self.session or not self.session.active then return end
     if not self._mirrorActive then return end          -- not a live mirror: do not rebroadcast stale loot
+    -- We are the authority now, not a mirror: only another ML's snapshot makes us one again. A later
+    -- regain (a loot-method round trip, or a handoff to an ML without WeirdLoot) is then judged on its
+    -- own instead of re-minting this session again.
+    self._mirrorActive = false
     self.session.id = self:NextEpoch()
     self.session.ownerKey = self:GetSessionOwnerKey()
     self.session.startedAt = time()                    -- our tenure starts now (shown by the ML prompt)
@@ -514,6 +518,26 @@ function addon:AnswerFreshSessionOnML(fresh)
         self:RecheckLootAuthority()
     end
     self._mlPromptAnswering = nil
+    -- greens waited in the corpse for this answer: ask now (a fresh session has no old disenchanter to name)
+    local ask = self._greensAskPending
+    self._greensAskPending = nil
+    if ask and self.PromptGreensDisenchanter then
+        self:PromptGreensDisenchanter(ask[1], ask[2], not fresh and ask[3] or nil)
+    end
+end
+
+-- Everything keyed by the old ledger's lot ids goes with it: rolls, popups, win cards, queued roll
+-- starts and recorded roll ends (the new ledger reuses the ids for different lots).
+local function dropLedgerState(self)
+    self:DropPhantomPickups()
+    if self.DropStaleLiveRolls then self:DropStaleLiveRolls() end
+    if self.DropStaleAwardCards then self:DropStaleAwardCards() end
+    self._rollBatch = nil
+    self.session.rollEnds = {}
+    self.session.deLots = {}
+    -- the disenchanter is per session: the next session's first green asks again
+    self.session.deer, self.session.deerSelf, self.session.deDefault = nil, nil, nil
+    if self._greensPrompt then self._greensPrompt:Hide() end
 end
 
 function addon:StartLootSession()
@@ -548,7 +572,7 @@ function addon:StartLootSession()
 
     -- Wipe the ledger and baseline the loot already in bags as idle (not fresh drops), so a
     -- session started mid-bag does not auto-roll everything the ML is already carrying.
-    self:DropPhantomPickups()
+    dropLedgerState(self)
     self.lootCore:Reset()
     local eligible = self:ItemIdCounts(self:BuildTradeableEpicCounts())
     self.session.prevEligible = eligible
@@ -585,8 +609,16 @@ function addon:ClearSession()
     self.session.prevEligible = {}
     self.session.lcOverrides = {}        -- temporary LC priorities die with the session
     self.lootView = { items = {}, results = {} }
-    self:DropPhantomPickups()
+    dropLedgerState(self)
     self.lootCore:Reset()
+    -- No session means no epoch. The ML tells the raid with one snapshot at the empty epoch (raiders
+    -- read it as "no active session" and drop the old rolls and cards); otherwise they keep the ended
+    -- session, since heartbeats stop and nothing else would reach them.
+    self.session.id = nil
+    if self:IsAuthorizedLootMaster() and self.syncChannel then
+        self.syncChannel:Broadcast(true)
+        self.lootCore:DrainDirty()
+    end
     self:TriggerCallback("SESSION_UPDATED")
 end
 
@@ -1014,6 +1046,7 @@ function addon:UnlockSessionRoll(lotId)
         return false
     end
     self:RetractRollForReroll(lotId)
+    if self.session.deLots then self.session.deLots[lotId] = nil end
     self:TriggerCallback("RESULTS_UPDATED")
     self:Print("Unlocked for reroll.")
     return true

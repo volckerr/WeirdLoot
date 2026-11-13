@@ -217,24 +217,6 @@ function addon:BuildOptionsTab()
               .. (on and "ON (new loot lands as Skipped; revisit from the loot tab)." or "OFF.")) end },
     })
 
-    -- Designated disenchanter (loot master). Mirrors /wl deer <name>. Non-epic BoE items
-    -- routed through Master Loot go to this player's bags via GiveMasterLoot.
-    local deerLabel = createLabel(panel, "Designated disenchanter:",
-        "TOPLEFT", autoSkipCB, "BOTTOMLEFT", 0, -16)
-    local deerBox = createTextEditBox(panel, 160)
-    deerBox:SetPoint("LEFT", deerLabel, "RIGHT", 12, 0)
-    deerBox.editBox:SetText(self.db.deer or "")
-    deerBox.editBox:SetScript("OnEditFocusLost", function(selfBox)
-        local name = string.trim(selfBox:GetText() or "")
-        if name == "" then
-            addon.db.deer = nil
-            addon:Print("Disenchanter cleared.")
-        else
-            addon.db.deer = name
-            addon:Print("Disenchanter set to " .. name .. " (non-epic BoE auto-routes there).")
-        end
-    end)
-
     -- Explanation tooltips (e.g. roll-bracket descriptions on the popup + loot tab)
     local explanationTipsCB = createOptionsCheckbox(panel, "Show explanation tooltips (spell out the roll brackets, etc.)")
     explanationTipsCB:SetPoint("TOPLEFT", autoCloseCB, "BOTTOMLEFT", 0, -20)
@@ -418,10 +400,10 @@ function addon:BuildOptionsTab()
     rollDurLabel:SetPoint("TOPLEFT", bannerMLSideCB, "BOTTOMLEFT", 0, -14)
 
     -- LOOT FILTERS: full width, below the taller (right) column. Nudge the -26 if a column grows.
-    -- Full width below the taller (right) column: anchor to its last widget (deerLabel) and pull x back
-    -- to the left margin, so the gap tracks the real column height instead of a guessed offset.
+    -- Full width below the taller (left) column: anchor to its last widget (bannerLockCB), so the gap
+    -- tracks the real column height instead of a guessed offset.
     filtersHeader:ClearAllPoints()
-    filtersHeader:SetPoint("TOPLEFT", deerLabel, "BOTTOMLEFT", -(RCOL_X - 12), -24)
+    filtersHeader:SetPoint("TOPLEFT", bannerLockCB, "BOTTOMLEFT", 0, -24)
     filtersDivider:SetPoint("RIGHT", panel, "RIGHT", FULL_DIV_R, 0)
 
     hideUnusableCB:ClearAllPoints()
@@ -442,6 +424,14 @@ function addon:BuildOptionsTab()
 
     updateFilterWarning()   -- reflect the saved white/black-list state on open
 
+    -- Reset settings: at the very bottom, out of the way of everyday toggles; confirms first.
+    local resetBtn = createButton(panel, "Reset settings", 120, 22)
+    resetBtn:SetPoint("TOPRIGHT", listsRegion, "BOTTOMRIGHT", 0, -12)
+    resetBtn:SetScript("OnClick", function() StaticPopup_Show("WEIRDLOOT_RESET_OPTIONS") end)
+    local resetNote = createLabel(panel, "|cff9a9384Puts every option on this page back to its default.|r",
+        "RIGHT", resetBtn, "LEFT", -10, 0)
+    panel.resetBtn = resetBtn
+
     panel.autoCloseCB = autoCloseCB
     panel.autoCloseSeconds = autoCloseSeconds
     panel.rollDurBox = rollDurBox
@@ -449,7 +439,6 @@ function addon:BuildOptionsTab()
     panel.autoRollCB = autoRollCB
     panel.autoStartCB = autoStartCB
     panel.autoSkipCB = autoSkipCB
-    panel.deerEditBox = deerBox
     panel.whitelistCB = whitelistCB
     panel.whitelistBox = whitelistBox
     panel.blacklistCB = blacklistCB
@@ -462,6 +451,10 @@ function addon:BuildOptionsTab()
     panel.bannerInstantCB = bannerInstantCB
     panel.bannerMLSideCB = bannerMLSideCB
     panel.bannerLockCB = bannerLockCB
+    panel.keepResultCB = keepResultCB
+    panel.explanationTipsCB = explanationTipsCB
+    panel.hideUnrolledWinsCB = hideUnrolledWinsCB
+    panel.anchorText = anchorText
 end
 
 -- Re-sync the options-tab widgets from db state. Called from the slash-command handlers so a
@@ -486,7 +479,22 @@ function addon:RefreshOptionsTab()
     if inner.autoSkipCB then
         inner.autoSkipCB:SetChecked(opt.autoSkipRoll and true or false)
     end
-    if inner.deerEditBox and inner.deerEditBox.editBox then
-        inner.deerEditBox.editBox:SetText(self.db.deer or "")
+    -- the rest of the page, so a Reset settings shows at once
+    if inner.autoCloseCB then inner.autoCloseCB:SetChecked(opt.resultPopupAutoCloseEnabled and true or false) end
+    if inner.autoCloseSeconds then inner.autoCloseSeconds:SetText(tostring(opt.resultPopupAutoCloseSeconds or 15)) end
+    if inner.keepResultCB then inner.keepResultCB:SetChecked(opt.forceKeepResultPopup ~= false) end
+    if inner.rollDurBox then inner.rollDurBox:SetText(tostring(opt.rollDuration)) end
+    if inner.rollBatchBox then inner.rollBatchBox:SetText(tostring(opt.rollBatchSize or 5)) end
+    if inner.explanationTipsCB then inner.explanationTipsCB:SetChecked(opt.explanationTooltipsEnabled ~= false) end
+    if inner.hideUnusableCB then inner.hideUnusableCB:SetChecked(opt.hideUnusableRolls and true or false) end
+    if inner.hideUnrolledWinsCB then inner.hideUnrolledWinsCB:SetChecked(opt.hideUnrolledWins and true or false) end
+    if inner.minimapCB then inner.minimapCB:SetChecked(not (opt.minimapButtonHidden and true or false)) end
+    if inner.anchorDrop and inner.anchorText then
+        UIDropDownMenu_SetText(inner.anchorDrop, inner.anchorText(opt.rollResultTooltipAnchor or "RIGHT"))
     end
+    if inner.bannerMinimalCB then inner.bannerMinimalCB:SetChecked(opt.bannerMinimal and true or false) end
+    if inner.bannerInstantCB then inner.bannerInstantCB:SetChecked(opt.bannerInstant and true or false) end
+    if inner.bannerMLSideCB then inner.bannerMLSideCB:SetChecked((opt.bannerMLSide or "RIGHT") == "LEFT") end
+    if inner.bannerLockCB then inner.bannerLockCB:SetChecked(opt.bannerLocked and true or false) end
 end
+

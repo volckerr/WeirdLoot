@@ -361,6 +361,36 @@ function addon:RestoreOwnerRolls()
     end
 end
 
+-- Loot master moved (handoff or loan): an open roll's record still has the old side's controls. The new
+-- ML's raider record has no End/Cancel and no auto-end, so the roll could never close; the old ML keeps
+-- End/Cancel it may no longer use. Rebuild each live roll for our side with the time it had left.
+function addon:RebindRollOwnership(isML)
+    if not (self.live and self.live.rolls) then return end
+    local core = self.lootCore
+    local now = GetTime()
+    local moved = {}
+    for id, roll in pairs(self.live.rolls) do
+        local lot = core and core:Get(id)
+        if not roll.resolved and (roll.owner and true or false) ~= (isML and true or false)
+            and lot and lot.state == core.STATE.ROLLING then
+            moved[id] = math.max(0, (roll.deadline or now) - now)
+        end
+    end
+    if not next(moved) then return end
+    self:DropStaleLiveRolls(function(id) return moved[id] == nil end)
+    if isML then
+        local ends = sessionRollEnds(self)
+        for id, left in pairs(moved) do ends[id] = time() + left end
+        self:RestoreOwnerRolls()
+    else
+        self._rollRemaining = self._rollRemaining or {}
+        for id, left in pairs(moved) do
+            self._rollRemaining[id] = left
+            self:RestoreRollPopup(core:Get(id))
+        end
+    end
+end
+
 function addon:HasOpenPendingForLot(lotId)
     for _, f in ipairs(self.live.active) do
         if f.mode == "pending" and f.lotId == lotId then return true end
@@ -1625,6 +1655,20 @@ function addon:CloseInterestPopup(roll)
     end
 end
 
+-- Lot ids restart at L:1 on every ledger reset, so a live roll left from the old ledger names a
+-- different lot: End or a pick would act on the wrong item, and its dedupe key hides the new lot's
+-- card. keep(id, roll) picks the survivors; without it every roll goes.
+function addon:DropStaleLiveRolls(keep)
+    if not (self.live and self.live.rolls) then return end
+    for id, roll in pairs(self.live.rolls) do
+        if not (keep and keep(id, roll)) then
+            self:CloseInterestPopup(roll)
+            self.live.rolls[id] = nil
+        end
+    end
+    compactPopups(self)
+end
+
 -- choose MS/OS/TM/Pass on a popup. The popup stays open after a choice (so everyone
 -- sees the roll's progress) and the chosen button is highlighted. The sole exception
 -- is Pass for a non-ML roller, which dismisses the loot immediately; the ML never
@@ -2089,9 +2133,10 @@ end
 -- A no-winner win card for the loot master: shows the item with a "no one rolled" line and a reroll
 -- button. Reroll = unlock the resolved lot (back to rollable) then start a fresh roll, the same two
 -- steps the ML does by hand via Unlock Roll + Start. ML-only (built only on the resolving client).
-function addon:BannerNoWinnerItem(roll)
+-- deTo: the copy already went to that player to disenchant (the card says so; no Disenchant choice).
+function addon:BannerNoWinnerItem(roll, deTo)
     local lotId = roll.id
-    return {
+    local item = {
         key = lotId,
         link = roll.link,
         icon = roll.icon,
@@ -2101,6 +2146,18 @@ function addon:BannerNoWinnerItem(roll)
             if self:UnlockSessionRoll(lotId) then self:StartLiveRoll(lotId) end
         end,
     }
+    local itemId = roll.itemId or (self.lootCore:Get(lotId) or {}).itemId
+    if deTo then
+        item.deTo = deTo
+        item.deToClass = getPlayerClassName(self, util:NormalizeKey(deTo))
+    elseif itemId and self.DisenchantCandidates then
+        item.deCandidates, item.deNeed = self:DisenchantCandidates(itemId)
+        if self.MarkCantHold then self:MarkCantHold(item.deCandidates, itemId) end
+        item.onDisenchant = function(who) self:SendForDisenchant(lotId, who) end
+        local cands = item.deCandidates
+        item.getDEDefault = function() return self:DisenchantDefault(cands) end   -- read at click time
+    end
+    return item
 end
 
 -- The base loot-council win card: reads "Loot Council" and shows the full roller breakdown instead of
@@ -2217,7 +2274,8 @@ end
 -- AwardCopy fills one copy (payout owes it via lotAwarded, sync carries the award), then we broadcast a
 -- normal WIN with every winner assigned so far so the raid gets the standard win card, and re-render the
 -- ML card (advance the flyout or collapse once all copies are awarded).
-function addon:AwardLootCouncilCopy(lotId, winner)
+-- forDE: a no-winner copy sent to disenchant (SendForDisenchant); the card then reads "<name> to disenchant".
+function addon:AwardLootCouncilCopy(lotId, winner, forDE)
     if not self:IsAuthorizedLootMaster() then return end
     local core = self.lootCore
     local lot = core:Get(lotId)
@@ -2231,7 +2289,7 @@ function addon:AwardLootCouncilCopy(lotId, winner)
         if a.winner then winners[#winners + 1] = a.winner end
     end
     self:SendLargeMessage("WIN", {
-        lotId, tostring(lot.itemId or 0), table.concat(winners, ","), "lcwin", "0", self:EncodeSections(sections),
+        lotId, tostring(lot.itemId or 0), table.concat(winners, ","), forDE and "de" or "lcwin", "0", self:EncodeSections(sections),
     }, "RAID", nil, "ALERT")
     self:TriggerCallback("RESULTS_UPDATED")
 
@@ -2241,6 +2299,11 @@ function addon:AwardLootCouncilCopy(lotId, winner)
     -- would collapse to a plain win card and no pickup would ever run. Only a real OWED award
     -- has a pickup (an ML self-award has nothing to move).
     local award = lot.awards and lot.awards[awardIndex]
+    if forDE and lot.phantom and award and award.state == core.AWARD.OWED and self.payout then
+        -- a corpse pickup is not traded, so the payout whisper never runs: tell them here
+        local _, link = util:ItemRender(lot.itemId)
+        self.payout:_whisper(winner, (link or "Your item") .. " is coming to you to disenchant.")
+    end
     if lot.phantom and award and award.state == core.AWARD.OWED then
         if lot.invisibleToML then
             self.phantomLoans = self.phantomLoans or {}
@@ -2253,12 +2316,21 @@ function addon:AwardLootCouncilCopy(lotId, winner)
             self.phantomSends = self.phantomSends or {}
             self.phantomSends[lotId] = { itemId = lot.itemId, target = winner }
             self:ShowPhantomSendCard(lotId)
-            if self.lootObs and self.lootObs.open then self:TryPhantomSends() end
-            self:Print("Re-open the corpse to send the item to " .. winner .. ".")
+            if self.lootObs and self.lootObs.open then
+                self:TryPhantomSends()   -- the window is open: it goes out now
+            else
+                self:Print("Re-open the corpse to send the item to " .. winner .. ".")
+            end
         end
         return
     end
 
+    if forDE then
+        local _, link, icon = util:ItemRender(lot.itemId)
+        self:AddLootBannerItem(self:BannerNoWinnerItem({ id = lotId, itemId = lot.itemId, link = link, icon = icon,
+            quantity = #(lot.awards or {}) }, winner))
+        return
+    end
     self:ShowLootCouncilCard(lotId)
 end
 
@@ -2279,13 +2351,39 @@ function addon:ShowPhantomSendCard(lotId)
         if a.winner then winners[#winners + 1] = send and send.target or a.winner end
     end
     local pseudo = { id = lotId, link = link, icon = icon, quantity = #(lot.awards or {}), name = name }
+    local deTo = self.DisenchantTarget and self:DisenchantTarget(lotId)
+    if deTo then
+        -- for disenchanting: "<name> to disenchant", the On Corpse tag until the pickup, and Reroll
+        local item = self:BannerNoWinnerItem({ id = lotId, itemId = lot.itemId, link = link, icon = icon,
+            quantity = pseudo.quantity }, deTo)
+        if send and send.refused then
+            -- refused: the reason replaces "<name> to disenchant", and the Disenchant list opens to pick again
+            item.refusedText = send.refused.who .. " can't take it (" .. send.refused.why .. ")"
+            item.deCandidates, item.deNeed = self:DisenchantCandidates(lot.itemId)
+            self:MarkCantHold(item.deCandidates, lot.itemId)
+            item.onDisenchant = function(who) self:SetPhantomSendTarget(lotId, who) end
+            item.openDE = true
+        end
+        if send then
+            item.onCorpse = true
+            item.onReroll = function()
+                self.phantomSends[lotId] = nil
+                if self:UnlockSessionRoll(lotId) then self:StartLiveRoll(lotId) end
+            end
+        else
+            item.onReroll = nil
+        end
+        self:AddLootBannerItem(item)
+        return
+    end
     local item = self:BannerItemFromResult(pseudo, winners, sections)
 
     if send then
         item.corpseSend = true
         item.currentTarget = send.target
-        item.candidates = self:LootCouncilCandidates(name, sections, lot.itemId)
+        item.candidates = self:MarkCantHold(self:LootCouncilCandidates(name, sections, lot.itemId), lot.itemId)
         item.onAward = function(who) self:SetPhantomSendTarget(lotId, who) end
+        if send.refused then item.refusedText = send.refused.who .. " can't take it (" .. send.refused.why .. ")" end
         if not self:HasDeadCreatureTarget() then
             item.onForgive = function() self:ConfirmForgivePhantom(lotId) end
         end
@@ -2506,6 +2604,12 @@ function addon:OnWinMessage(fields)
         local sections = self:DecodeSections(sectionsText)
         if mode == "lc" then
             self:AddLootBannerItem(self:BannerLootCouncilItem(roll, sections))     -- council deciding, no winner yet
+        elseif mode == "de" then
+            -- sent to a raider to disenchant: not a win (an older build reads it as one)
+            if #winners > 0 then
+                self:AddLootBannerItem({ key = roll.id, link = roll.link, icon = roll.icon, quantity = roll.quantity,
+                    noWinner = true, deTo = winners[1], deToClass = getPlayerClassName(self, util:NormalizeKey(winners[1])) })
+            end
         elseif mode == "lcwin" then
             if #winners > 0 then self:AddLootBannerItem(self:BannerItemFromResult(roll, winners, sections, true)) end  -- LC Decision
         elseif #winners > 0 then

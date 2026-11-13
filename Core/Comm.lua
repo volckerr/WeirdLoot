@@ -394,6 +394,7 @@ end
 function addon:SyncApplySnapshot(lines, epoch)
     -- An empty epoch means the authority has no active session (it answered a request with an
     -- empty snapshot). Don't fabricate a session: mark inactive rather than show a phantom one.
+    local prevEpoch = self.session.id
     self.session.id = epoch
     self.session.active = epoch ~= nil and epoch ~= ""
     -- Track the epoch so our next mint stays above it, and remember that this session is a LIVE mirror
@@ -434,7 +435,30 @@ function addon:SyncApplySnapshot(lines, epoch)
             self:StashRollRemaining(lot, remaining)   -- before ApplyRemote -> ledgerChanged -> SyncRollPopups
         end
     end
+    -- A new epoch is a handoff (same lots, continued) or a new session (lot ids reused for other
+    -- items, all starting idle). Drop the rolls and win cards whose lot is not the same item in the
+    -- same state any more, before the apply restores rolls for the new lots.
+    if prevEpoch and prevEpoch ~= "" and prevEpoch ~= epoch then
+        local byId = {}
+        for _, lot in ipairs(lots) do byId[lot.id] = lot end
+        local ROLLING = self.lootCore.STATE.ROLLING
+        if self.DropStaleLiveRolls then
+            self:DropStaleLiveRolls(function(id, roll)
+                local lot = byId[id]
+                return lot and lot.itemId == roll.itemId and lot.state == ROLLING
+            end)
+        end
+        if self.DropStaleAwardCards then
+            local prior = {}
+            for _, lot in ipairs(self.lootCore:All()) do prior[lot.id] = lot.itemId end
+            self:DropStaleAwardCards(function(key)
+                local lot = byId[key]
+                return lot and lot.itemId == prior[key] and lot.awards and #lot.awards > 0
+            end)
+        end
+    end
     self.lootCore:ApplyRemote({ seq = seq, lots = lots })
+    if self.ReportEnchanting then self:ReportEnchanting() end   -- a new session (or ML) hears our skill once
     -- reflect the ML's freshly-synced accepting-trades flag + loot-master presence (guarded: the
     -- minimap UI may not be loaded)
     if self.UpdateMinimapTradeStatus then self:UpdateMinimapTradeStatus() end
@@ -674,6 +698,10 @@ function addon:HandleCommMessage(sender, value)
             return
         end
         self:SetPlayerResponse(fields[2], fields[3], fields[4]) -- ML core write; snapshot syncs back
+    elseif command == "DEWATCH" then
+        self:OnDEWatch(sender, fields)   -- the ML's current disenchanters: watch our bags (Disenchant.lua)
+    elseif command == "ENCH" then
+        self:OnEnchantingReport(sender, fields[1], fields[2])   -- raider's Enchanting and free bag slots (Disenchant.lua)
     elseif command == "NAMED_ITEMS_SYNC" then
         local expectedLootMaster = util:NormalizeKey(self:GetLootMasterName() or "")
         local senderKey = util:NormalizeKey(sender or "")

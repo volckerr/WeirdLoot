@@ -168,6 +168,29 @@ test("no-winner card: shows a reroll button that fires its callback and dismisse
     check(not row.alive, "the card dismissed itself after reroll")
 end)
 
+test("no-winner card: a reroll that ends with no winner again shows its card again", function()
+    local w = bannerWorld(true, function(opt)
+        opt.forceKeepResultPopup = true
+        opt.resultPopupAutoCloseEnabled = true
+        opt.resultPopupAutoCloseSeconds = 10
+    end)
+    local function card(key) return { key = key, link = WON.link, icon = "x", quantity = 1, noWinner = true, onReroll = function() end } end
+    local function shown(key)
+        for _, f in ipairs(awarded(w).LootFrames) do if f.alive and not f.fading and f.rowKey == key then return f end end
+    end
+    w.addon:AddLootBannerItem(card("L:30"))           -- another card keeps the banner open
+    w.addon:AddLootBannerItem(card("L:31"))
+    local row
+    for _ = 1, 60 do F.pump(w, 0.001); row = shown("L:31"); if row then break end end
+    row.RerollButton:GetScript("OnClick")(row.RerollButton)
+    pumpN(w, 0.05, 3)
+    check(shown("L:30"), "the other card is still up")
+    w.addon:AddLootBannerItem(card("L:31"))           -- the reroll resolved with no rollers again
+    local again
+    for _ = 1, 60 do F.pump(w, 0.001); again = shown("L:31"); if again then break end end
+    check(again ~= nil, "the second no-winner card shows")
+end)
+
 test("LC award card: candidate flyout fires the award callback, then clears on the same-key collapse", function()
     local w = bannerWorld(true, function(opt)
         opt.forceKeepResultPopup = true
@@ -468,6 +491,19 @@ test("CloseAwardCard drops a card still queued before the banner plays, and clos
     w.addon:CloseAwardCard("L:9")
     pumpN(w, 1.0, 3)
     check(not row.alive, "a shown card fades out")
+end)
+
+test("CloseRollBannerCard drops a roll card still queued before the banner plays", function()
+    local w = bannerWorld(true)
+    local drops = w.env.WeirdLootDropsBanner
+    local card = { key = "L:11", link = WON.link, icon = "x", quantity = 1, rollDuration = 30,
+        prio = "MS > OS", isOwner = true, onMLEnd = function() end }
+    w.addon:AddRollBannerItem(card)                 -- queued: no pump yet, like a restore right after a reload
+    w.addon:CloseRollBannerCard("L:11")
+    for _ = 1, 60 do F.pump(w, 0.001) end
+    local shown
+    for _, f in ipairs(drops.LootFrames) do if f.alive and f.rowKey == "L:11" then shown = f end end
+    check(not shown, "the queued roll card never appears")
 end)
 
 F.endSuite()

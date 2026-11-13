@@ -266,6 +266,9 @@ local FLYOUT_BACKDROP = {
 local NAME_LOOK   = { bg = { 0.20, 0.19, 0.18, 0.95 }, edge = { 0.55, 0.50, 0.40, 0.9 } }
 local PRESS_LOOK  = { bg = { 0.06, 0.06, 0.05, 0.98 }, edge = { 1.00, 0.82, 0.00, 1.0 } }
 local ACTION_LOOK = { bg = { 0.30, 0.05, 0.04, 0.95 }, edge = { 0.70, 0.25, 0.15, 0.9 } }
+-- the remembered disenchanter: lit, not sunk, so it reads as the default rather than as unavailable
+local LIT_LOOK    = { bg = { 0.38, 0.30, 0.06, 0.98 }, edge = { 1.00, 0.82, 0.00, 1.0 } }
+local BLOCKED_LOOK = { bg = { 0.11, 0.10, 0.09, 0.95 }, edge = { 0.29, 0.27, 0.23, 0.9 } }
 
 local function applyLook(row, look, sunk)
     row:SetBackdropColor(unpack(look.bg))
@@ -301,11 +304,11 @@ end
 
 -- A name row: fixed-width button with its label left-aligned, roll and pick shown beside it.
 -- pressed: the send target, drawn sunk in (darker, gold edge, label a pixel lower).
-local function placeNameRow(frame, row, y, pressed)
+local function placeNameRow(frame, row, y, pressed, lit)
     row:ClearAllPoints()
     row:SetPoint("TOPLEFT", frame.LCFlyout, "TOPLEFT", 8, y)
     row:SetWidth(NAME_W)
-    applyLook(row, pressed and PRESS_LOOK or NAME_LOOK, pressed)
+    applyLook(row, lit and LIT_LOOK or (pressed and PRESS_LOOK or NAME_LOOK), pressed and not lit)
     row.text:ClearAllPoints()
     row.text:SetPoint("LEFT", row, "LEFT", 8, row.textY)
     row.text:SetPoint("RIGHT", row, "RIGHT", -4, row.textY)
@@ -334,6 +337,9 @@ end
 local function populateLCFlyout(frame, data)
     local cands = data.candidates
     local offer = (data.lootCouncil or data.corpseSend or data.loanSend) and data.onAward and cands and #cands > 0
+    -- the no-winner card's Disenchant flyout: open only while its button is pressed
+    local de = frame.deOpen and data.onDisenchant and data.deCandidates and #data.deCandidates > 0
+    if de then cands, offer = data.deCandidates, true end
     if not offer and not data.onLoanCancel then
         frame.LCFlyout:Hide()
         return false
@@ -353,7 +359,9 @@ local function populateLCFlyout(frame, data)
         local total = data.copiesTotal or 1
         local remaining = data.copiesRemaining or total
         local nextCopy = math.min(total - remaining + 1, total)
-        if data.loanSend then
+        if de then
+            frame.LCFlyoutHeader:SetText("|cffffd200Disenchant to:|r")
+        elseif data.loanSend then
             -- invisible phantom: rows lend the WoW ML role so the picked player collects the drop
             frame.LCFlyoutHeader:SetText("|cffffd200Loan master loot to:|r")
         elseif data.corpseSend then
@@ -368,14 +376,28 @@ local function populateLCFlyout(frame, data)
         for i, c in ipairs(cands) do
             local row = lcFlyoutRow(frame, i)
             -- the send target is drawn pressed in; nothing to mark when there is one name
-            local current = data.currentTarget and #cands > 1 and c.name
-                and util:NormalizeKey(c.name) == util:NormalizeKey(data.currentTarget) or false
-            placeNameRow(frame, row, -20 - (i - 1) * FLYOUT_STEP, current)
-            row.text:SetText(colorName(c.name, c.class))
-            row.roll:SetText("|cffbbbbbb" .. (c.roll and tostring(c.roll) or "-") .. "|r")
+            local target = data.currentTarget
+            if de then target = data.getDEDefault and data.getDEDefault() end
+            local current = target and (de or #cands > 1) and c.name
+                and util:NormalizeKey(c.name) == util:NormalizeKey(target) or false
+            placeNameRow(frame, row, -20 - (i - 1) * FLYOUT_STEP, current, de and current)
+            row.text:SetText(c.blocked and ("|cff777777" .. c.name .. "|r") or colorName(c.name, c.class))
+            -- disenchant rows show free bag slots, not skill: everyone listed can take it
+            -- the free-slot text takes the roll and (empty) pick columns together
+            row.roll:SetWidth(de and (ROLL_W + 6 + PICK_W) or ROLL_W)
+            row.roll:SetJustifyH(de and "LEFT" or "RIGHT")
+            row.roll:SetText(de and addon:FreeSlotsText(c.name)
+                or ("|cffbbbbbb" .. (c.roll and tostring(c.roll) or "-") .. "|r"))
             row.pick:SetText(c.bracket or "")
             row.awardName = c.name
-            row:SetScript("OnClick", function() if data.onAward then data.onAward(row.awardName) end end)
+            local pick = de and data.onDisenchant or data.onAward
+            if c.blocked then
+                -- the server refused them this item: shown, greyed with why, not clickable
+                applyLook(row, BLOCKED_LOOK, false)
+                row.roll:SetText("|cff777777" .. (c.blocked == "already has one" and "has one" or c.blocked) .. "|r")
+                pick = nil
+            end
+            row:SetScript("OnClick", function() if pick then pick(row.awardName) end end)
             row:Show()
             shown = i
         end
@@ -393,7 +415,18 @@ local function populateLCFlyout(frame, data)
         local r = frame.LCRows[i]
         r:Hide(); r.roll:Hide(); r.pick:Hide()
     end
-    frame.LCFlyout:SetHeight(26 + shown * FLYOUT_STEP + ((data.onForgive and not data.onLoanCancel) and FLYOUT_GAP or 0))
+    -- Disenchant flyout: say what the second click does
+    local hint = de and data.getDEDefault and data.getDEDefault()
+    frame.LCHint:ClearAllPoints()
+    frame.LCHint:SetPoint("TOPLEFT", frame.LCFlyout, "TOPLEFT", 8, -24 - shown * FLYOUT_STEP)
+    if hint then
+        frame.LCHint:SetText("|cffaaaaaaClick Disenchant again for " .. hint .. ".|r")
+        frame.LCHint:Show()
+    else
+        frame.LCHint:Hide()
+    end
+    frame.LCFlyout:SetHeight(26 + shown * FLYOUT_STEP + ((data.onForgive and not data.onLoanCancel) and FLYOUT_GAP or 0)
+        + (hint and 14 or 0))
     frame.LCFlyout:ClearAllPoints()
     if bannerMLSide() == "LEFT" then
         frame.LCFlyout:SetPoint("TOPRIGHT", frame, "TOPLEFT", -6, 2)
@@ -402,6 +435,33 @@ local function populateLCFlyout(frame, data)
     end
     frame.LCFlyout:Show()
     return true
+end
+
+-- The no-winner card's Disenchant button (ML only): shown when the item can be disenchanted, greyed out
+-- with the needed skill when nobody in the raid has it. Reroll moves left of it while it shows.
+local function applyDEButton(frame, data)
+    local btn = frame.DEButton
+    frame.deData = data
+    frame.RerollButton:ClearAllPoints()
+    frame.RerollButton:SetWidth(60)
+    if not (data.onDisenchant and data.deNeed) then
+        frame.deOpen = nil
+        btn:Hide()
+        frame.RerollButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -19, 5)
+        return
+    end
+    frame.RerollButton:SetPoint("RIGHT", btn, "LEFT", -2, 0)
+    frame.RerollButton:SetWidth(44)
+    if #(data.deCandidates or {}) > 0 then
+        btn:Enable(); btn.reason = nil
+    else
+        btn:Disable()
+        btn.reason = "No one in the raid can disenchant this (needs Enchanting " .. data.deNeed .. ")."
+        frame.deOpen = nil
+    end
+    btn:SetAlpha(1)
+    btn:Show()
+    if data.openDE and btn:IsEnabled() then frame.deOpen = true end
 end
 
 -- roll card second line, shared by card creation and the dedupe re-assert; an item with no
@@ -588,6 +648,10 @@ local function BossBanner_ConfigureLootFrame(lootFrame, data)
         -- roll card: the item's prio sits under the name (bracket buttons sit below it), mirroring
         -- the original roll popup's "Prio:" line.
         nameText = rollPrioText(data.prio)
+    elseif data.refusedText then
+        nameText = "|cffff6060" .. data.refusedText .. "|r"
+    elseif data.noWinner and data.deTo then
+        nameText = colorName(data.deTo, data.deToClass) .. " |cffaaaaaato disenchant|r"
     elseif data.noWinner then
         nameText = "|cffaaaaaaNo one rolled|r"   -- ML-only card: the reroll button sits opposite
     elseif data.lootCouncil then
@@ -1146,9 +1210,43 @@ local function buildBanner(bannerName, medallionCfg)
             frame.fading = true
             frame.fadeLeft = parent.instant and 0 or ROW_FADE_TIME
             frame.RerollButton:Hide()
+            -- the reroll can end with no winner again: free the key so that card shows
+            if frame.rowKey then parent.seenKeys[frame.rowKey] = nil; frame.rowKey = nil end
             if cb then cb() end
         end)
         frame.RerollButton:Hide()
+
+        -- Disenchant (won card, ML only): on a "no one rolled" card, right of Reroll (the likelier choice
+        -- for a drop nobody wanted). Toggles the flyout of raiders who can disenchant it; greyed out with
+        -- the reason on hover when nobody can.
+        frame.DEButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        frame.DEButton:SetText("Disenchant")
+        frame.DEButton:SetWidth(66)
+        frame.DEButton:SetHeight(18)
+        frame.DEButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -19, 5)
+        frame.DEButton:SetMotionScriptsWhileDisabled(true)
+        -- First click opens the flyout with the last disenchanter picked drawn pressed; a second click
+        -- sends to them (no name hunt each time). With no default the second click just closes it.
+        frame.DEButton:SetScript("OnClick", function()
+            local data = frame.deData
+            local default = data and data.getDEDefault and data.getDEDefault()
+            if frame.deOpen and default and data.onDisenchant then
+                frame.deOpen = nil
+                frame.LCFlyout:Hide()
+                data.onDisenchant(default)
+                return
+            end
+            frame.deOpen = not frame.deOpen
+            if data then populateLCFlyout(frame, data) end
+        end)
+        frame.DEButton:SetScript("OnEnter", function(btn)
+            if btn:GetButtonState() ~= "DISABLED" or not btn.reason then return end
+            GameTooltip:SetOwner(btn, "ANCHOR_TOP")
+            GameTooltip:SetText(btn.reason, 1, 0.25, 0.25, 1, true)
+            GameTooltip:Show()
+        end)
+        frame.DEButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        frame.DEButton:Hide()
 
         -- LC award flyout (loot master only): a panel off the card's ML-controls side, populated in the
         -- won-card configure path (populateLCFlyout) with one clickable candidate row per roller/named.
@@ -1167,6 +1265,8 @@ local function buildBanner(bannerName, medallionCfg)
         frame.LCFlyoutHeader:SetPoint("TOPRIGHT", frame.LCFlyout, "TOPRIGHT", -8, -7)
         frame.LCFlyoutHeader:SetJustifyH("LEFT")
         frame.LCRows = {}
+        frame.LCHint = frame.LCFlyout:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        frame.LCHint:SetJustifyH("LEFT")
         frame.LCFlyout:Hide()
 
         tinsert(parent.LootFrames, frame)
@@ -1628,6 +1728,7 @@ local function buildBanner(bannerName, medallionCfg)
         frame.onReroll = nil
         frame.RerollButton:SetAlpha(1)
         frame.RerollButton:Hide()       -- only a no-winner won card shows it
+        frame.DEButton:Hide(); frame.deOpen = nil; frame.deData = nil
         frame.LCFlyout:Hide()           -- only an ML award/offer/loan card shows it (populated below)
         if data.rollDuration then
             -- roll-prompt row: a countdown of the roll timer + clickable bracket buttons. The live
@@ -1696,6 +1797,7 @@ local function buildBanner(bannerName, medallionCfg)
         if frame.closeImmediate then frame.CloseButton:Show() end   -- ML: no wait
         frame.onReroll = data.onReroll
         if data.onReroll then frame.RerollButton:Show() end   -- "no one rolled" ML card / LC award card
+        applyDEButton(frame, data)
         populateLCFlyout(frame, data)                         -- ML award/offer/loan flyout; hides itself otherwise
         positionOnCorpseTag(frame, data)                      -- after the flyout: the send card's tag hangs under it
         if additional then
@@ -2026,6 +2128,13 @@ local function buildBanner(bannerName, medallionCfg)
             copiesTotal = item.copiesTotal, -- LC award card (ML): total copies (multi-copy header)
             copiesRemaining = item.copiesRemaining, -- LC award card (ML): copies still to assign
             awarded = item.awarded,         -- LC award card (ML): winners assigned so far
+            deCandidates = item.deCandidates, -- no-winner card (ML): raiders who can disenchant it { name, class, roll = skill }
+            deNeed = item.deNeed,           -- no-winner card (ML): Enchanting needed; nil = cannot be disenchanted
+            onDisenchant = item.onDisenchant, -- no-winner card (ML): send the copy to that raider to disenchant
+            deTo = item.deTo, deToClass = item.deToClass, -- no-winner card: already sent to them to disenchant
+            getDEDefault = item.getDEDefault, -- no-winner card (ML): the last disenchanter picked, if they can take this one
+            refusedText = item.refusedText, -- corpse send card (ML): the server refused the pick; why, in red
+            openDE = item.openDE,           -- refused disenchant send: open its Disenchant list right away
             onReroll = item.onReroll,   -- won card only: ML reroll callback; present = show the Reroll button
             onLoanCancel = item.onLoanCancel, -- phantom loan card (ML): mid-loan; the flyout shows Cancel instead of the offer
             onForgive = item.onForgive, -- phantom send/loan card (ML): last flyout row writes the lost copy off
@@ -2080,6 +2189,7 @@ local function buildBanner(bannerName, medallionCfg)
                             BossBanner_ConfigureLootFrame(f, data)
                             f.onReroll = data.onReroll
                             if data.onReroll then f.RerollButton:Show() else f.RerollButton:Hide() end
+                            applyDEButton(f, data)
                             populateLCFlyout(f, data)
                             positionOnCorpseTag(f, data)   -- delivered: the tag clears with the send state
                         end
@@ -2444,6 +2554,11 @@ end
 function addon:CloseRollBannerCard(key)
     if not key then return end
     dropsBanner.seenKeys[key] = nil
+    -- not shown yet: right after a reload the banner queues cards until it plays
+    local queued = dropsBanner.pendingLoot
+    for i = #queued, 1, -1 do
+        if queued[i].key == key then table.remove(queued, i) end
+    end
     for _, f in ipairs(dropsBanner.LootFrames) do
         if f.alive and not f.fading and f.rowKey == key then
             f.rowKey = nil
@@ -2471,6 +2586,20 @@ function addon:CloseAwardCard(key)
             if f.RerollButton then f.RerollButton:Hide() end
             f.FadeOutNow()
         end
+    end
+end
+
+-- Win cards keyed by lots of an old ledger: a reused lot id would act on the wrong lot, and the
+-- leftover dedupe key would hide the new lot's win card. keep(key) picks the survivors; without it
+-- every card goes.
+function addon:DropStaleAwardCards(keep)
+    local keys = {}
+    for key in pairs(awardedBanner.seenKeys) do keys[#keys + 1] = key end
+    for _, data in ipairs(awardedBanner.pendingLoot) do
+        if data.key then keys[#keys + 1] = data.key end
+    end
+    for _, key in ipairs(keys) do
+        if not (keep and keep(key)) then self:CloseAwardCard(key) end
     end
 end
 

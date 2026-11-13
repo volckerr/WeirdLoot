@@ -587,3 +587,20 @@ end
 function addon:GetRosterEntries()
     return self.config.rosterEntries or {}
 end
+
+-- Options the reset leaves alone: the live on/off switch, and the player's own lists and presets.
+local RESET_KEEP = { disabled = true, whitelistEnabled = true, whitelistText = true, blacklistEnabled = true,
+    blacklistText = true, customBlacklistPresets = true, customWhitelistPresets = true }
+
+-- Every option on the Options page back to its default (addon.OPTION_DEFAULTS), applied at once. The page's
+-- widgets are re-synced in place (no reload).
+function addon:ResetOptions()
+    local opt = self.db.options
+    for k, v in pairs(self.OPTION_DEFAULTS) do
+        if not RESET_KEEP[k] then opt[k] = type(v) == "table" and self.util:CloneTable(v) or v end
+    end
+    self.db.autoRoll = false
+    if self.SetMinimapButtonShown then self:SetMinimapButtonShown(not opt.minimapButtonHidden) end
+    if self.RefreshOptionsTab then self:RefreshOptionsTab() end
+    self:Print("Settings reset to their defaults.")
+end
