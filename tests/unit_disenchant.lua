@@ -52,6 +52,12 @@ test("skill rule: one baseline per quality (Northrend); only armor and weapons",
     itemAs(w, 4, 226, "Consumable"); eq(w.addon:DisenchantSkillFor(40005), nil, "not a consumable")
     itemAs(w, 5, 245); eq(w.addon:DisenchantSkillFor(40005), nil, "not a legendary")
     itemAs(w, 1, 200); eq(w.addon:DisenchantSkillFor(40005), nil, "not a white item")
+    w.env.__boeItems[40005] = true
+    itemAs(w, 4, 226); eq(w.addon:DisenchantSkillFor(40005), nil, "not an epic BoE: it stays with the ML")
+    local list, need = w.addon:DisenchantCandidates(40005)
+    eq(need, nil, "so its no-winner card gets no Disenchant button"); eq(#list, 0, "and no candidates")
+    itemAs(w, 3, 187); eq(w.addon:DisenchantSkillFor(40005), 325, "a blue BoE is still offered")
+    itemAs(w, 2, 60); eq(w.addon:DisenchantSkillFor(40005), 350, "a green BoE too")
 end)
 
 test("skill read: the Enchanting line by its localized name, 0 without it", function()
