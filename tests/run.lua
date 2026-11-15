@@ -3718,6 +3718,7 @@ test("roster check: our session's raid is empty after login -> warned; a raider'
     w.env.GetNumPartyMembers = function() return 0 end
     w.env.GetRaidRosterInfo = function() return nil end
     w.env.GetLootMethod = function() return "freeforall" end
+    w.addon._sawGroup = nil                         -- a fresh login: the harness raid was never seen
     local shown = popups(w)
     w.addon:ArmRosterCheck()
     F.advanceClock(11); F.pump(w)
@@ -3732,6 +3733,68 @@ test("roster check: our session's raid is empty after login -> warned; a raider'
     r.addon:ArmRosterCheck()
     F.advanceClock(11); F.pump(r)
     eq(#rshown, 0, "not ours: nothing")
+end)
+
+local function noGroup(w)
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.env.GetNumPartyMembers = function() return 0 end
+    w.env.GetRaidRosterInfo = function() return nil end
+    w.env.GetLootMethod = function() return "freeforall" end
+end
+
+test("roster check: 'I left the raid' is saved with the session, so a reload does not ask again", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    noGroup(w)
+    eq(w.addon:RosterProblem(), "empty", "asks before the answer")
+    w.env.StaticPopupDialogs["WEIRDLOOT_ROSTER_EMPTY"].OnCancel(nil, nil, "clicked")
+    eq(w.addon.session.wasML, nil, "the answer clears the saved loot-master mark")
+    eq(w.addon:RosterProblem(), nil, "no problem left to ask about, this login or the next")
+end)
+
+test("roster check: closing the warning by 'I left the raid' does not claim the roster loaded", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    noGroup(w)
+    w.addon._sawGroup = nil
+    local shown = popups(w)
+    local said = {}
+    w.addon.Print = function(_, msg) said[#said + 1] = tostring(msg) end
+    w.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(w)
+    check(has(shown, "WEIRDLOOT_ROSTER_EMPTY"), "warned")
+    w.env.StaticPopupDialogs["WEIRDLOOT_ROSTER_EMPTY"].OnCancel(nil, nil, "clicked")
+    F.advanceClock(3); F.pump(w)
+    local loaded = false
+    for _, m in ipairs(said) do if m:find("roster loaded", 1, true) then loaded = true end end
+    check(not loaded, "no 'roster loaded' line")
+    eq(w.addon._rosterWarn, nil, "the warning is closed")
+end)
+
+test("roster check: a group seen and then gone while online is a leave, not a failed load", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)                                     -- in a raid as ML: the mark is set
+    w.addon.session.wasML = true
+    w.env.GetNumRaidMembers = function() return 2 end
+    w.addon:RefreshLootAuthority()
+    noGroup(w)
+    w.addon:RefreshLootAuthority()                  -- RAID_ROSTER_UPDATE after leaving
+    eq(w.addon.session.wasML, nil, "the leave clears the mark")
+    eq(w.addon:RosterProblem(), nil, "the next login does not warn")
+end)
+
+test("roster check: the no-group moment at login is not a leave", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    noGroup(w)
+    w.addon._sawGroup = nil                         -- a fresh login: the harness raid was never seen
+    w.addon:RefreshLootAuthority()                  -- login: no group yet, none seen this login
+    eq(w.addon.session.wasML, true, "the mark stays")
+    eq(w.addon:RosterProblem(), "empty", "an empty raid at login still warns")
 end)
 
 test("roster check: a normal login warns nothing", function()

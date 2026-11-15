@@ -254,7 +254,8 @@ StaticPopupDialogs["WEIRDLOOT_ROSTER_EMPTY"] = {
     button2 = "I left the raid",
     OnAccept = function() ReloadUI() end,
     OnCancel = function(_, _, reason)
-        if reason == "clicked" then addon._rosterLeftRaid = true end   -- really left: stop asking this login
+        -- really left: the session is no longer ours to run, so no login asks again (saved with it)
+        if reason == "clicked" and addon.session then addon.session.wasML = nil end
     end,
     timeout = 0,
     whileDead = 1,
