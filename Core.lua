@@ -368,6 +368,8 @@ function addon:PLAYER_LOGIN()
     self.events:RegisterEvent("PLAYER_TARGET_CHANGED")
     self.events:RegisterEvent("GUILD_ROSTER_UPDATE")
     self.events:RegisterEvent("UI_ERROR_MESSAGE")
+    self.events:RegisterEvent("QUEST_LOG_UPDATE")
+    self.events:RegisterEvent("QUEST_QUERY_COMPLETE")
     self:RequestGuildRoster()
 
     if self:IsDisabled() then
@@ -498,6 +500,7 @@ function addon:RecheckLootAuthority()
 end
 
 function addon:PLAYER_ENTERING_WORLD()
+    self:RefreshQuestStarters()         -- turned-in quests asked for long before any roll needs them
     self:ArmRosterCheck()               -- this server sometimes logs us in with no raid roster
     self:RefreshAll()
     if self:IsAuthorizedLootMaster() then

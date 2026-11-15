@@ -2626,6 +2626,21 @@ function addon:RefreshRollBannerCard(key, link, icon)
     end
 end
 
+-- Re-apply a roll card's bracket availability in place (the player's quest state moved after the
+-- card was built). Grays and disables only; the card, Pass and the ML's End/Cancel stay. A card
+-- still queued (not shown yet) takes the new map when it plays.
+function addon:SetRollBannerCardDisabled(key, disabled)
+    if not key then return end
+    for _, item in ipairs(dropsBanner.pendingLoot or {}) do
+        if item.key == key then item.disabled = disabled end
+    end
+    for _, f in ipairs(dropsBanner.LootFrames) do
+        if f.alive and not f.fading and f.rowKey == key and f.rollDuration then
+            applyRollButtons(f, { disabled = disabled, selected = f.selectedBracket })
+        end
+    end
+end
+
 -- Reflect the local player's pick on an open roll card (loot-tab picks and the popup path both
 -- route through ApplyLocalChoice); nil clears the highlight, mirroring the popup behavior.
 function addon:SetRollBannerCardChoice(key, bracket)

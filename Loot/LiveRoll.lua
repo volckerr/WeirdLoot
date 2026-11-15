@@ -731,7 +731,7 @@ local DISABLED_REASON_TEXT = {
     type = "Not used for this item type.",
     class = "Your class cannot use this item.",
     unique = "You already have this unique item.",
-    quest = "You already hold this quest item or completed its quest.",
+    quest = "You hold this quest item, or you are on or past its quest.",
     mount = "You have already learned this mount.",
     noprio = "No priority is listed for this item.",
 }
@@ -1288,12 +1288,80 @@ addon.ROLL_REWARD_GATE = {
     [46053] = { 45588, 45618, 45608, 45614 },   -- 25: Drape of the Skyborn, Sunglimmer Cloak, Brann's Signet Ring, Starshine Circle
 }
 
+-- Drop -> the quest it starts (item_template.startquest). The server hides a quest-starting drop from
+-- anyone whose start quest is in their log or already turned in (LootMgr.cpp AllowedForPlayer), so a
+-- winner in either state could never pick up the copy. The reward gate above misses a player partway
+-- through a chain (no drop held, no reward yet) and one on a quest whose drop is used up on accepting.
+addon.QUEST_STARTER = {
+    [44569] = 13372, [44577] = 13375,   -- Key to the Focusing Iris (normal / heroic)
+    [45506] = 13604, [45857] = 13817,   -- Archivum Data Disc (10 / 25)
+    [46052] = 13631, [46053] = 13819,   -- Reply-Code Alpha (10 / 25)
+}
+
+-- 3.3.5a has no quest-log lookup by id, and quests under a collapsed header are not listed. So a
+-- starter quest seen in the log stays remembered until a scan that can see every quest misses it.
+-- Returns left (a remembered quest left the log: turned in or abandoned, ask the server which) and
+-- changed (the remembered set moved, so open cards need a re-check).
+-- ponytail: a quest already under a collapsed header at login is never seen; the bag and reward
+-- checks still cover it, and the turned-in list covers it once handed in.
+function addon:ScanQuestStarters()
+    if not (GetNumQuestLogEntries and GetQuestLogTitle) then return false, false end
+    local entries, quests = GetNumQuestLogEntries()
+    local seen, visible = {}, 0
+    for i = 1, entries or 0 do
+        local _, _, _, _, isHeader, _, _, _, questId = GetQuestLogTitle(i)
+        if not isHeader then
+            visible = visible + 1
+            if questId then seen[questId] = true end
+        end
+    end
+    local full = visible >= (quests or 0)
+    self.starterInLog = self.starterInLog or {}
+    local left, changed = false, false
+    for _, questId in pairs(self.QUEST_STARTER) do
+        if seen[questId] and not self.starterInLog[questId] then
+            self.starterInLog[questId] = true
+            changed = true
+        elseif full and not seen[questId] and self.starterInLog[questId] then
+            self.starterInLog[questId] = nil
+            left, changed = true, true
+        end
+    end
+    return left, changed
+end
+
+-- Login, reload and zone-in: read the log and ask the server for turned-in quests well before any
+-- roll needs the answer (about 0.4 s on live). The answer lands in QUEST_QUERY_COMPLETE.
+function addon:RefreshQuestStarters()
+    self:ScanQuestStarters()
+    if QueryQuestsCompleted then QueryQuestsCompleted() end
+end
+
+function addon:QUEST_LOG_UPDATE()
+    local left, changed = self:ScanQuestStarters()
+    if left and QueryQuestsCompleted then QueryQuestsCompleted() end
+    if changed then self:RecheckQuestRollBlocks() end
+end
+
+function addon:QUEST_QUERY_COMPLETE()
+    if GetQuestsCompleted then self.questsDone = GetQuestsCompleted() end
+    self:RecheckQuestRollBlocks()
+end
+
+-- You are on (or past) the quest this drop starts, so the server will never show you the drop.
+function addon:QuestStarterTaken(itemId)
+    local questId = itemId and self.QUEST_STARTER[itemId]
+    if not questId then return false end
+    return (self.starterInLog and self.starterInLog[questId]) or (self.questsDone and self.questsDone[questId]) or false
+end
+
 -- You already hold the quest reward this drop grants (any of them, for a choice reward), so you
 -- finished the quest; or you still hold the DROP itself (a quest starter the server keeps until the
 -- turn-in, and one that carries no Unique limit, like the Archivum Data Disc), so a second copy is
 -- useless to you and, once the quest is started, unlootable. Either way: don't roll on it.
 -- A drop copy the ML holds only to hand out is not yours (OwnsCopyOf); a held reward always is.
 function addon:OwnsQuestReward(itemId, forPhantom)
+    if self:QuestStarterTaken(itemId) then return true end
     local reward = self.ROLL_REWARD_GATE[itemId]
     if reward == nil then return false end
     if self:OwnsCopyOf(itemId, forPhantom) then return true end
@@ -1424,16 +1492,8 @@ end
 -- false falls back to the popup (roll already over, or a defensive banner refusal) so a roll is
 -- never lost to the banner.
 -- ---------------------------------------------------------------------------
-function addon:ShowRollBannerCard(roll)
-    if not self.AddRollBannerItem then return false end
-    local remaining = (roll.deadline or (GetTime() + (roll.duration or ROLL_DURATION))) - GetTime()
-    if remaining <= 0 then return false end
-
-    -- ItemRender always synthesizes a link; a nil NAME is the cold-cache signal (as TrackPopupItem)
-    local itemName, link, icon = util:ItemRender(roll.itemId)
-    if not itemName then self:PrimeItemInfo(roll.itemId) end   -- cold cache: card shows item:id at first
-
-    local playerName = util:GetPlayerName("player")
+-- The card's bracket label -> reason map for this roll, under the same policy as the popup.
+local function rollCardDisabled(self, roll, playerName)
     local allowed = isPlayerAllowedForRoll(self, roll, playerName)
     local blockReason = self:RollSelfBlockReason(roll.itemId, roll.phantom)
     -- same ML-authority rule as the popup: BiS follows the prio the ML broadcast, not local lists
@@ -1444,6 +1504,38 @@ function addon:ShowRollBannerCard(roll)
         local label = CARD_BRACKETS[tier]
         if label then disabled[label] = DISABLED_REASON_TEXT[reason] or true end
     end
+    return disabled
+end
+
+-- The quest state behind a quest-starter roll just moved (log change, or the turned-in list arrived
+-- after the card was built): re-apply the brackets on every open quest-starter card and popup.
+function addon:RecheckQuestRollBlocks()
+    if not (self.live and self.live.rolls) then return end
+    local playerName = util:GetPlayerName("player")
+    for key, roll in pairs(self.live.rolls) do
+        if not roll.resolved and self.QUEST_STARTER[roll.itemId] then
+            if self.SetRollBannerCardDisabled then
+                self:SetRollBannerCardDisabled(key, rollCardDisabled(self, roll, playerName))
+            end
+            local f = roll.popup
+            if f and f.roll == roll and f.mode == "interest" then
+                applyInterestButtonAvailability(self, f, roll)
+            end
+        end
+    end
+end
+
+function addon:ShowRollBannerCard(roll)
+    if not self.AddRollBannerItem then return false end
+    local remaining = (roll.deadline or (GetTime() + (roll.duration or ROLL_DURATION))) - GetTime()
+    if remaining <= 0 then return false end
+
+    -- ItemRender always synthesizes a link; a nil NAME is the cold-cache signal (as TrackPopupItem)
+    local itemName, link, icon = util:ItemRender(roll.itemId)
+    if not itemName then self:PrimeItemInfo(roll.itemId) end   -- cold cache: card shows item:id at first
+
+    local playerName = util:GetPlayerName("player")
+    local disabled = rollCardDisabled(self, roll, playerName)
 
     local mine = self:GetPlayerResponse(roll.id, playerName)
     roll.choice = mine
