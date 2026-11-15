@@ -590,9 +590,10 @@ function addon:HandleSlashCommand(msg)
     local command = string.lower(string.trim(msg or ""))
     if command == "start" then
         if self._mlPromptPending then
-            -- the fresh-session prompt holds authority until answered: /wl start is its Start Fresh
-            StaticPopup_Hide("WEIRDLOOT_FRESH_SESSION_ON_ML")
+            -- the fresh-session prompt holds authority until answered: /wl start is its Start Fresh.
+            -- Answer before hiding: the dialog's OnHide answers Keep, and the first answer wins.
             self:AnswerFreshSessionOnML(true)
+            StaticPopup_Hide("WEIRDLOOT_FRESH_SESSION_ON_ML")
         else
             self:StartLootSession()
         end

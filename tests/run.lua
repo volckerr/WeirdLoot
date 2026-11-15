@@ -3676,6 +3676,11 @@ test("ml-prompt: /wl start while the prompt is open is its Start Fresh", functio
     local w = makeWorld("Promotee", false)
     leftover(w, 3600)
     engageML(w)
+    -- the client fires the dialog's OnHide on a hide, and OnHide answers Keep
+    w.env.StaticPopup_Hide = function(which)
+        local d = w.env.StaticPopupDialogs[which]
+        if d and d.OnHide then d.OnHide() end
+    end
     w.addon:HandleSlashCommand("start")
     eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
     check(w.addon.session.id ~= "5", "a fresh session started")
