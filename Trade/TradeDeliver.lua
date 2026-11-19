@@ -666,7 +666,24 @@ function Engine:WhisperOwed(onlyName)
             elseif won == "" then msg = "Open a trade with me to collect " .. de .. " to disenchant."
             else msg = "Open a trade with me to collect: " .. won .. ". To disenchant: " .. de .. "." end
             self:_whisper(entry.name, msg)
+            self._lastWhisper = self._lastWhisper or {}
+            self._lastWhisper[key] = GetTime()
             sent = sent + 1
+        end
+    end
+    return sent
+end
+
+-- The win whisper goes out once, and a winner busy with the next pull forgets it. When a boss's rolls
+-- are done, whoever is still owed is whispered again, except anyone already whispered since `since`
+-- (the boss's own winners) or whose win whisper is about to go out.
+function Engine:RemindOwed(since)
+    if not self.payoutActive then return 0 end
+    local sent = 0
+    local pending, last = self._oweTimers or {}, self._lastWhisper or {}
+    for key, entry in pairs(self.db.owed) do
+        if #entry.items > 0 and not pending[key] and not (since and last[key] and last[key] >= since) then
+            sent = sent + self:WhisperOwed(entry.name)
         end
     end
     return sent

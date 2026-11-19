@@ -1161,6 +1161,94 @@ test("payout: two wins close together send one come-trade whisper listing both",
     eq(#whispers, 1, "an owe forgiven before the whisper sends nothing")
 end)
 
+local function captureWhispers(w)
+    local whispers = {}
+    w.env.ChatThrottleLib = nil
+    w.env.SendChatMessage = function(msg, kind, _, target)
+        if kind == "WHISPER" then whispers[#whispers + 1] = { msg = msg, target = target } end
+    end
+    return whispers
+end
+
+local function whispersTo(whispers, name)
+    local n = 0
+    for _, wh in ipairs(whispers) do if wh.target == name then n = n + 1 end end
+    return n
+end
+
+test("payout reminder: still-owed winners are whispered again, skipping this boss's winners and pending win whispers", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local whispers = captureWhispers(w)
+    local pay = w.addon.payout
+    pay.payoutActive = true
+    pay:Owe("Alice", 40005, 1, "|cffffffff|Hitem:40005|h[Blade]|h|r")   -- an earlier boss
+    F.pump(w, 3)
+    eq(whispersTo(whispers, "Alice"), 1, "Alice got her win whisper")
+
+    F.advanceClock(100)
+    local since = w.env.GetTime()                     -- the next boss's rolls start
+    pay:Owe("Carol", 40007, 1, "|cffffffff|Hitem:40007|h[Ring]|h|r")
+    F.pump(w, 3)                                      -- Carol won early in this boss: already whispered
+    pay:Owe("Bob", 40006, 1, "|cffffffff|Hitem:40006|h[Shield]|h|r")   -- Bob's win whisper is pending
+    eq(pay:RemindOwed(since), 1, "one reminder")
+    eq(whispersTo(whispers, "Alice"), 2, "Alice, owed from earlier, is reminded")
+    eq(whispersTo(whispers, "Carol"), 1, "Carol is not: whispered during this boss")
+    eq(whispersTo(whispers, "Bob"), 0, "Bob is not: his win whisper is about to go out")
+    F.pump(w, 3)
+    eq(whispersTo(whispers, "Bob"), 1, "Bob's win whisper went out once")
+    eq(pay:RemindOwed(since), 0, "the same boss reminds nobody twice")
+
+    F.advanceClock(50)
+    eq(pay:RemindOwed(w.env.GetTime()), 3, "the next boss reminds all three, no cooldown")
+
+
+    pay:StopPayout()
+    eq(pay:RemindOwed(), 0, "no reminders while payout is paused")
+end)
+
+test("payout reminder: a finished batch of two or more rolls reminds winners owed from earlier; a lone trash drop does not", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local whispers = captureWhispers(w)
+    w.addon.payout.payoutActive = true
+    w.addon.db.autoRoll = false
+    w.addon.db.options = w.addon.db.options or {}
+    w.addon.db.options.autoStartRoll = false
+    w.addon.db.options.autoSkipRoll = false
+    setBag(w, 40005, 1); bagUpdate(w)                 -- an earlier boss: Alice wins a copy the ML holds
+    local won = openLot(w, 40005)
+    w.addon:StartLiveRoll(won.id)
+    w.addon:RegisterInterest(won.id, "Alice", "ms")
+    w.addon:ResolveLiveRoll(won.id)
+    F.pump(w, 3)
+    eq(whispersTo(whispers, "Alice"), 1, "Alice got her win whisper")
+    F.advanceClock(700)
+    w.addon.db.options.autoStartRoll = true
+
+    setBag(w, 40031, 1); bagUpdate(w)                 -- a trash mob drops one item: auto-started
+    local trash = lotsFor(w, 40031)[1]
+    eq(w.addon.lootCore:State(trash.id), "rolling", "the trash drop is rolling")
+    w.addon:ResolveLiveRoll(trash.id)
+    eq(whispersTo(whispers, "Alice"), 1, "a lone trash drop finishing reminds nobody")
+
+    setBag(w, 40034, 1); bagUpdate(w)                 -- two trash mobs, the second looted while the
+    setBag(w, 40035, 1); bagUpdate(w)                 -- first one's roll is still open: one batch
+    local t1, t2 = lotsFor(w, 40034)[1], lotsFor(w, 40035)[1]
+    eq(w.addon.lootCore:State(t2.id), "rolling", "the second trash drop joined the open batch")
+    w.addon:ResolveLiveRoll(t1.id); w.addon:ResolveLiveRoll(t2.id)
+    eq(whispersTo(whispers, "Alice"), 1, "two single drops in one batch still remind nobody")
+
+    setBag(w, 40032, 1); setBag(w, 40033, 1); bagUpdate(w)   -- a boss drops two
+    local a, b = lotsFor(w, 40032)[1], lotsFor(w, 40033)[1]
+    eq(w.addon.lootCore:State(a.id), "rolling", "the boss's first drop is rolling")
+    eq(w.addon.lootCore:State(b.id), "rolling", "and its second")
+    w.addon:ResolveLiveRoll(a.id)
+    eq(whispersTo(whispers, "Alice"), 1, "no reminder while a boss roll is still open")
+    w.addon:ResolveLiveRoll(b.id)
+    eq(whispersTo(whispers, "Alice"), 2, "Alice is reminded when the boss's rolls finish")
+end)
+
 test("payout: rerolling one of two copies owed to a winner keeps the other copy owed", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)
