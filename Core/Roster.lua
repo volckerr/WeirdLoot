@@ -341,11 +341,17 @@ function addon:RefreshLootAuthority()
     self.roster.lootMasterName = lootMasterName
     self.roster.isLootMaster = isLootMaster
     -- whether this session is ours to run: an empty raid after a login is only suspicious if it was
+    -- A group seen and then gone during this login is a real leave (or disband), not a roster that
+    -- failed to load, so the next login must not warn. "Seen first" matters: every login reads no
+    -- group for a moment before the roster arrives.
+    local inGroup = numRaid > 0 or (GetNumPartyMembers() or 0) > 0
+    local leftGroup = not inGroup and self._sawGroup
+    self._sawGroup = inGroup or nil
     if self.session and self.session.active then
         if isLootMaster then
             self.session.wasML = true
-        elseif lootMasterName and lootMasterName ~= "" and playerName
-            and util:NormalizeKey(lootMasterName) ~= util:NormalizeKey(playerName) then
+        elseif leftGroup or (lootMasterName and lootMasterName ~= "" and playerName
+            and util:NormalizeKey(lootMasterName) ~= util:NormalizeKey(playerName)) then
             self.session.wasML = nil
         end
     end
@@ -529,7 +535,7 @@ function addon:RosterProblem()
         if ours or (method == "master" and partyMasterIndex == 0) then return "names" end
         return nil
     end
-    if ours and not self._rosterLeftRaid and (GetNumRaidMembers() or 0) == 0 and (GetNumPartyMembers() or 0) == 0 then
+    if ours and (GetNumRaidMembers() or 0) == 0 and (GetNumPartyMembers() or 0) == 0 then
         return "empty"
     end
 end
@@ -564,10 +570,13 @@ function addon:CheckRoster()
         end
         self:ArmRosterCheck(ROSTER_RECHECK)
     elseif self._rosterWarn then
-        -- it loaded after all: close the warning and let authority (and the start-fresh prompt) land
+        -- it loaded after all: close the warning and let authority (and the start-fresh prompt) land.
+        -- No group means the problem went away by "I left the raid", not by a roster arriving.
         self._rosterWarn = nil
         StaticPopup_Hide("WEIRDLOOT_ROSTER_NAMES"); StaticPopup_Hide("WEIRDLOOT_ROSTER_EMPTY")
-        self:Print("The raid roster loaded.")
+        if (GetNumRaidMembers() or 0) > 0 or (GetNumPartyMembers() or 0) > 0 then
+            self:Print("The raid roster loaded.")
+        end
         self:RefreshLootAuthority()
     end
 end

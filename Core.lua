@@ -368,6 +368,8 @@ function addon:PLAYER_LOGIN()
     self.events:RegisterEvent("PLAYER_TARGET_CHANGED")
     self.events:RegisterEvent("GUILD_ROSTER_UPDATE")
     self.events:RegisterEvent("UI_ERROR_MESSAGE")
+    self.events:RegisterEvent("QUEST_LOG_UPDATE")
+    self.events:RegisterEvent("QUEST_QUERY_COMPLETE")
     self:RequestGuildRoster()
 
     if self:IsDisabled() then
@@ -498,6 +500,7 @@ function addon:RecheckLootAuthority()
 end
 
 function addon:PLAYER_ENTERING_WORLD()
+    self:RefreshQuestStarters()         -- turned-in quests asked for long before any roll needs them
     self:ArmRosterCheck()               -- this server sometimes logs us in with no raid roster
     self:RefreshAll()
     if self:IsAuthorizedLootMaster() then
@@ -587,9 +590,10 @@ function addon:HandleSlashCommand(msg)
     local command = string.lower(string.trim(msg or ""))
     if command == "start" then
         if self._mlPromptPending then
-            -- the fresh-session prompt holds authority until answered: /wl start is its Start Fresh
-            StaticPopup_Hide("WEIRDLOOT_FRESH_SESSION_ON_ML")
+            -- the fresh-session prompt holds authority until answered: /wl start is its Start Fresh.
+            -- Answer before hiding: the dialog's OnHide answers Keep, and the first answer wins.
             self:AnswerFreshSessionOnML(true)
+            StaticPopup_Hide("WEIRDLOOT_FRESH_SESSION_ON_ML")
         else
             self:StartLootSession()
         end

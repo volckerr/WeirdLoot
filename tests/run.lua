@@ -3676,6 +3676,11 @@ test("ml-prompt: /wl start while the prompt is open is its Start Fresh", functio
     local w = makeWorld("Promotee", false)
     leftover(w, 3600)
     engageML(w)
+    -- the client fires the dialog's OnHide on a hide, and OnHide answers Keep
+    w.env.StaticPopup_Hide = function(which)
+        local d = w.env.StaticPopupDialogs[which]
+        if d and d.OnHide then d.OnHide() end
+    end
     w.addon:HandleSlashCommand("start")
     eq(w.addon:IsAuthorizedLootMaster(), true, "authority landed")
     check(w.addon.session.id ~= "5", "a fresh session started")
@@ -3718,6 +3723,7 @@ test("roster check: our session's raid is empty after login -> warned; a raider'
     w.env.GetNumPartyMembers = function() return 0 end
     w.env.GetRaidRosterInfo = function() return nil end
     w.env.GetLootMethod = function() return "freeforall" end
+    w.addon._sawGroup = nil                         -- a fresh login: the harness raid was never seen
     local shown = popups(w)
     w.addon:ArmRosterCheck()
     F.advanceClock(11); F.pump(w)
@@ -3732,6 +3738,68 @@ test("roster check: our session's raid is empty after login -> warned; a raider'
     r.addon:ArmRosterCheck()
     F.advanceClock(11); F.pump(r)
     eq(#rshown, 0, "not ours: nothing")
+end)
+
+local function noGroup(w)
+    w.env.GetNumRaidMembers = function() return 0 end
+    w.env.GetNumPartyMembers = function() return 0 end
+    w.env.GetRaidRosterInfo = function() return nil end
+    w.env.GetLootMethod = function() return "freeforall" end
+end
+
+test("roster check: 'I left the raid' is saved with the session, so a reload does not ask again", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    noGroup(w)
+    eq(w.addon:RosterProblem(), "empty", "asks before the answer")
+    w.env.StaticPopupDialogs["WEIRDLOOT_ROSTER_EMPTY"].OnCancel(nil, nil, "clicked")
+    eq(w.addon.session.wasML, nil, "the answer clears the saved loot-master mark")
+    eq(w.addon:RosterProblem(), nil, "no problem left to ask about, this login or the next")
+end)
+
+test("roster check: closing the warning by 'I left the raid' does not claim the roster loaded", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    noGroup(w)
+    w.addon._sawGroup = nil
+    local shown = popups(w)
+    local said = {}
+    w.addon.Print = function(_, msg) said[#said + 1] = tostring(msg) end
+    w.addon:ArmRosterCheck()
+    F.advanceClock(11); F.pump(w)
+    check(has(shown, "WEIRDLOOT_ROSTER_EMPTY"), "warned")
+    w.env.StaticPopupDialogs["WEIRDLOOT_ROSTER_EMPTY"].OnCancel(nil, nil, "clicked")
+    F.advanceClock(3); F.pump(w)
+    local loaded = false
+    for _, m in ipairs(said) do if m:find("roster loaded", 1, true) then loaded = true end end
+    check(not loaded, "no 'roster loaded' line")
+    eq(w.addon._rosterWarn, nil, "the warning is closed")
+end)
+
+test("roster check: a group seen and then gone while online is a leave, not a failed load", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    engageML(w)                                     -- in a raid as ML: the mark is set
+    w.addon.session.wasML = true
+    w.env.GetNumRaidMembers = function() return 2 end
+    w.addon:RefreshLootAuthority()
+    noGroup(w)
+    w.addon:RefreshLootAuthority()                  -- RAID_ROSTER_UPDATE after leaving
+    eq(w.addon.session.wasML, nil, "the leave clears the mark")
+    eq(w.addon:RosterProblem(), nil, "the next login does not warn")
+end)
+
+test("roster check: the no-group moment at login is not a leave", function()
+    local w = makeWorld("Promotee", false)
+    leftover(w, 3600)
+    w.addon.session.wasML = true
+    noGroup(w)
+    w.addon._sawGroup = nil                         -- a fresh login: the harness raid was never seen
+    w.addon:RefreshLootAuthority()                  -- login: no group yet, none seen this login
+    eq(w.addon.session.wasML, true, "the mark stays")
+    eq(w.addon:RosterProblem(), "empty", "an empty raid at login still warns")
 end)
 
 test("roster check: a normal login warns nothing", function()
@@ -3829,6 +3897,65 @@ test("handoff mid-roll: the new ML owns the open roll with its time left, the ol
     eq(ml.addon:IsAuthorizedLootMaster(), false, "the old ML lost authority")
     local after = ml.addon.live.rolls[lot.id]
     check(after and not after.owner, "and its card is a raider card now")
+end)
+
+test("handoff mid-batch: rolls the other ML ended free their auto-start slots on the old ML", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local promotee = makeWorld("Promotee", false)
+    startSession(ml)
+    ml.addon.db.autoRoll = false
+    ml.addon.db.options = ml.addon.db.options or {}
+    ml.addon.db.options.autoStartRoll = true
+    ml.addon.db.options.autoSkipRoll = false
+    ml.addon.db.options.rollBatchSize = 5
+    for i = 1, 4 do setBag(ml, 40000 + i, 1) end
+    bagUpdate(ml)
+    eq(ml.addon:CountActiveRollBatch(), 4, "4 rolls auto-started")
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(promotee)
+
+    engageML(promotee)
+    ml.env.GetLootMethod = function() return "master", 0, 2 end
+    ml.env.GetRaidRosterInfo = function(i) return (i == 2) and "Promotee" or "Masterlooter", 0 end
+    ml.addon:RefreshLootAuthority()
+    local ids = {}
+    for id in pairs(promotee.addon.live.rolls) do ids[#ids + 1] = id end
+    for _, id in ipairs(ids) do promotee.addon:ResolveLiveRoll(id) end
+    clearWire(); promotee.addon:BroadcastSession(); flushWireTo(ml)
+
+    promotee.env.GetLootMethod = function() return "master", 0, 2 end
+    promotee.env.GetRaidRosterInfo = function(i) return (i == 2) and "Masterlooter" or "Promotee", 0 end
+    promotee.addon:RefreshLootAuthority()
+    ml.env.GetLootMethod = function() return "master", 0, 1 end
+    engageML(ml)
+    eq(ml.addon:IsAuthorizedLootMaster(), true, "the old ML has loot master back")
+
+    local sent = 0
+    local orig = ml.addon.SendLargeMessage
+    ml.addon.SendLargeMessage = function(self, c, ...) if c == "DROP" then sent = sent + 1 end return orig(self, c, ...) end
+    for i = 11, 13 do setBag(ml, 40000 + i, 1) end
+    bagUpdate(ml)
+    eq(sent, 3, "all 3 new drops go up for roll at once")
+end)
+
+test("auto-start: a lot StartLiveRoll refuses does not hold a batch slot", function()
+    local ml = makeWorld("Masterlooter", true)
+    startSession(ml)
+    ml.addon.db.autoRoll = false
+    ml.addon.db.options = ml.addon.db.options or {}
+    ml.addon.db.options.autoStartRoll = false
+    ml.addon.db.options.autoSkipRoll = false
+    ml.addon.db.options.rollBatchSize = 2
+    for i = 1, 3 do setBag(ml, 40020 + i, 1); bagUpdate(ml) end
+    local origStart = ml.addon.StartLiveRoll
+    local refused
+    ml.addon.StartLiveRoll = function(self, id)
+        if not refused then refused = id; return end   -- the first start bails (e.g. trade window gone)
+        return origStart(self, id)
+    end
+    ml.addon:ProcessLoot()
+    eq(ml.addon:CountActiveRollBatch(), 2, "the refused lot's slot went to the next lot")
+    eq(#ml.addon._rollBatch.queue, 0, "nothing left waiting behind a dead slot")
 end)
 
 test("handoff: once a mirror has taken over, a loot-method round trip keeps its epoch", function()
@@ -3989,7 +4116,7 @@ end)
 -- This file's own tests ran inline above; their pass/fail counts are already folded into F.
 -- The final summary below totals everything.
 -- ===========================================================================
-local suites = { "tests/unit_util.lua", "tests/unit_config.lua", "tests/unit_guildroster.lua", "tests/unit_lootcore.lua", "tests/unit_resolver.lua", "tests/unit_iteminfo.lua", "tests/unit_preset_registry.lua", "tests/unit_bagslots.lua", "tests/unit_itemfilter.lua", "tests/unit_toc.lua", "tests/unit_version.lua", "tests/unit_perchar.lua", "tests/unit_debug.lua", "tests/unit_upcomingrolls.lua", "tests/unit_uiload.lua", "tests/unit_bannerlifetime.lua", "tests/unit_phantom.lua", "tests/unit_mlloan.lua", "tests/unit_disenchant.lua" }
+local suites = { "tests/unit_util.lua", "tests/unit_config.lua", "tests/unit_guildroster.lua", "tests/unit_lootcore.lua", "tests/unit_resolver.lua", "tests/unit_iteminfo.lua", "tests/unit_preset_registry.lua", "tests/unit_bagslots.lua", "tests/unit_itemfilter.lua", "tests/unit_toc.lua", "tests/unit_version.lua", "tests/unit_perchar.lua", "tests/unit_debug.lua", "tests/unit_upcomingrolls.lua", "tests/unit_uiload.lua", "tests/unit_bannerlifetime.lua", "tests/unit_phantom.lua", "tests/unit_mlloan.lua", "tests/unit_disenchant.lua", "tests/unit_queststarter.lua" }
 for _, path in ipairs(suites) do
     print(string.format("\n--- running %s ---", path))
     local ok, err = pcall(dofile, path)
