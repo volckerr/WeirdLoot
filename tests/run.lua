@@ -3899,6 +3899,65 @@ test("handoff mid-roll: the new ML owns the open roll with its time left, the ol
     check(after and not after.owner, "and its card is a raider card now")
 end)
 
+test("handoff mid-batch: rolls the other ML ended free their auto-start slots on the old ML", function()
+    clearWire()
+    local ml = makeWorld("Masterlooter", true)
+    local promotee = makeWorld("Promotee", false)
+    startSession(ml)
+    ml.addon.db.autoRoll = false
+    ml.addon.db.options = ml.addon.db.options or {}
+    ml.addon.db.options.autoStartRoll = true
+    ml.addon.db.options.autoSkipRoll = false
+    ml.addon.db.options.rollBatchSize = 5
+    for i = 1, 4 do setBag(ml, 40000 + i, 1) end
+    bagUpdate(ml)
+    eq(ml.addon:CountActiveRollBatch(), 4, "4 rolls auto-started")
+    clearWire(); ml.addon:BroadcastSession(); flushWireTo(promotee)
+
+    engageML(promotee)
+    ml.env.GetLootMethod = function() return "master", 0, 2 end
+    ml.env.GetRaidRosterInfo = function(i) return (i == 2) and "Promotee" or "Masterlooter", 0 end
+    ml.addon:RefreshLootAuthority()
+    local ids = {}
+    for id in pairs(promotee.addon.live.rolls) do ids[#ids + 1] = id end
+    for _, id in ipairs(ids) do promotee.addon:ResolveLiveRoll(id) end
+    clearWire(); promotee.addon:BroadcastSession(); flushWireTo(ml)
+
+    promotee.env.GetLootMethod = function() return "master", 0, 2 end
+    promotee.env.GetRaidRosterInfo = function(i) return (i == 2) and "Masterlooter" or "Promotee", 0 end
+    promotee.addon:RefreshLootAuthority()
+    ml.env.GetLootMethod = function() return "master", 0, 1 end
+    engageML(ml)
+    eq(ml.addon:IsAuthorizedLootMaster(), true, "the old ML has loot master back")
+
+    local sent = 0
+    local orig = ml.addon.SendLargeMessage
+    ml.addon.SendLargeMessage = function(self, c, ...) if c == "DROP" then sent = sent + 1 end return orig(self, c, ...) end
+    for i = 11, 13 do setBag(ml, 40000 + i, 1) end
+    bagUpdate(ml)
+    eq(sent, 3, "all 3 new drops go up for roll at once")
+end)
+
+test("auto-start: a lot StartLiveRoll refuses does not hold a batch slot", function()
+    local ml = makeWorld("Masterlooter", true)
+    startSession(ml)
+    ml.addon.db.autoRoll = false
+    ml.addon.db.options = ml.addon.db.options or {}
+    ml.addon.db.options.autoStartRoll = false
+    ml.addon.db.options.autoSkipRoll = false
+    ml.addon.db.options.rollBatchSize = 2
+    for i = 1, 3 do setBag(ml, 40020 + i, 1); bagUpdate(ml) end
+    local origStart = ml.addon.StartLiveRoll
+    local refused
+    ml.addon.StartLiveRoll = function(self, id)
+        if not refused then refused = id; return end   -- the first start bails (e.g. trade window gone)
+        return origStart(self, id)
+    end
+    ml.addon:ProcessLoot()
+    eq(ml.addon:CountActiveRollBatch(), 2, "the refused lot's slot went to the next lot")
+    eq(#ml.addon._rollBatch.queue, 0, "nothing left waiting behind a dead slot")
+end)
+
 test("handoff: once a mirror has taken over, a loot-method round trip keeps its epoch", function()
     local w = makeWorld("Promotee", false)
     leftover(w)

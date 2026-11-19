@@ -874,7 +874,12 @@ function addon:AdvanceRollBatch()
         local lot = self.lootCore:Get(lotId)
         if lot and lot.state ~= self.lootCore.STATE.ROLLING and lot.state ~= self.lootCore.STATE.RESOLVED then
             batch.active[lotId] = true
+            -- StartLiveRoll can re-enter here via ledgerChanged; the prune must not free this
+            -- slot before the lot reaches ROLLING.
+            local outer = batch.starting
+            batch.starting = lotId
             self:StartLiveRoll(lotId)
+            batch.starting = outer
         end
     end
     if #batch.queue == 0 and self:CountActiveRollBatch() == 0 then
@@ -882,11 +887,22 @@ function addon:AdvanceRollBatch()
     end
 end
 
+-- A slot frees only when this client resolves or cancels its roll. A roll another ML ended after a
+-- handoff, or one StartLiveRoll refused, never reports back, so the ledger decides: a slot whose lot
+-- is not ROLLING is free.
 function addon:CountActiveRollBatch()
     local batch = self._rollBatch
     if not batch then return 0 end
+    local core = self.lootCore
     local n = 0
-    for _ in pairs(batch.active) do n = n + 1 end
+    for id in pairs(batch.active) do
+        local lot = core:Get(id)
+        if id == batch.starting or (lot and lot.state == core.STATE.ROLLING) then
+            n = n + 1
+        else
+            batch.active[id] = nil
+        end
+    end
     return n
 end
 
