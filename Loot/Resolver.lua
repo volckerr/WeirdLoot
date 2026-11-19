@@ -859,7 +859,7 @@ function addon:ProcessLoot()
     local batchSize = tonumber(self.db and self.db.options and self.db.options.rollBatchSize) or 5
     if batchSize < 1 then batchSize = 1 end
 
-    self._rollBatch = { queue = queue, batchSize = batchSize, active = {} }
+    self._rollBatch = { queue = queue, batchSize = batchSize, active = {}, biggestDrop = #queue, startedAt = GetTime() }
     self:Print(string.format("Starting rolls in batches of %d (%d items queued).", batchSize, #queue))
     self:AdvanceRollBatch()
 end
@@ -924,8 +924,11 @@ function addon:EnqueueAutoStartLots(lotIds)
     local batchSize = tonumber(self.db and self.db.options and self.db.options.rollBatchSize) or 5
     if batchSize < 1 then batchSize = 1 end
     if not self._rollBatch then
-        self._rollBatch = { queue = {}, batchSize = batchSize, active = {}, silent = true }
+        self._rollBatch = { queue = {}, batchSize = batchSize, active = {}, silent = true, startedAt = GetTime() }
     end
+    -- one call is one loot event (a corpse's drops arrive in one debounced pass); a trash mob looted
+    -- while a boss's rolls are still open joins the batch but is still a drop of its own
+    self._rollBatch.biggestDrop = math.max(self._rollBatch.biggestDrop or 0, #lotIds)
     for _, id in ipairs(lotIds) do
         self._rollBatch.queue[#self._rollBatch.queue + 1] = id
     end
@@ -935,7 +938,13 @@ end
 function addon:FinishRollBatch()
     local session = self:GetCurrentSession()
     local silent = self._rollBatch and self._rollBatch.silent
+    local biggestDrop = self._rollBatch and self._rollBatch.biggestDrop or 0
+    local startedAt = self._rollBatch and self._rollBatch.startedAt
     self._rollBatch = nil
+    -- A drained batch holding a loot event of two or more items is a boss's loot done: nudge winners
+    -- still owed, skipping this batch's own winners (whispered since it started). Single drops (trash)
+    -- never do, even several in one batch.
+    if biggestDrop >= 2 and self.payout and self.payout.RemindOwed then self.payout:RemindOwed(startedAt) end
 
     if silent then
         self:BroadcastSession()
