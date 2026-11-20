@@ -1207,6 +1207,34 @@ test("payout reminder: still-owed winners are whispered again, skipping this bos
     eq(pay:RemindOwed(), 0, "no reminders while payout is paused")
 end)
 
+test("own whisper echo: hidden only for the line of a whisper the addon just sent", function()
+    local w = makeWorld("Masterlooter", true)
+    local util = w.addon.util
+    util:NoteOwnWhisper("Alice", "[WeirdLoot] Open a trade with me")
+    eq(util:IsOwnWhisperEcho("[WeirdLoot] Open a trade with me", "Alice", 7), true, "the echo of the sent whisper is hidden")
+    eq(util:IsOwnWhisperEcho("[WeirdLoot] Open a trade with me", "Alice", 7), true, "in every chat frame showing that line")
+    eq(util:IsOwnWhisperEcho("[WeirdLoot] Open a trade with me", "Alice", 8), false, "the same text typed later still shows")
+    util:NoteOwnWhisper("Alice", "[WeirdLoot] hi")
+    eq(util:IsOwnWhisperEcho("[WeirdLoot] hi", "Bob", 9), false, "another recipient's line shows")
+    eq(util:IsOwnWhisperEcho("[WeirdLoot] bye", "Alice", 9), false, "other text shows")
+    F.advanceClock(11)
+    eq(util:IsOwnWhisperEcho("[WeirdLoot] hi", "Alice", 9), false, "no longer hidden once the send is 10 s old")
+end)
+
+test("own whisper echo: payout and util whispers both register their echo", function()
+    local w = makeWorld("Masterlooter", true)
+    startSession(w)
+    local whispers = captureWhispers(w)
+    local util = w.addon.util
+    w.addon.payout.payoutActive = true
+    w.addon.payout:Owe("Alice", 40005, 1, "|cffffffff|Hitem:40005|h[Blade]|h|r")
+    F.pump(w, 3)
+    eq(#whispers, 1, "the come-trade whisper went out")
+    eq(util:IsOwnWhisperEcho(whispers[1].msg, "Alice", 21), true, "its echo is hidden")
+    util:WhisperChat("Bob", "loot it from the corpse now")
+    eq(util:IsOwnWhisperEcho(whispers[#whispers].msg, "Bob", 22), true, "a util whisper's echo is hidden")
+end)
+
 test("payout reminder: a finished batch of two or more rolls reminds winners owed from earlier; a lone trash drop does not", function()
     local w = makeWorld("Masterlooter", true)
     startSession(w)

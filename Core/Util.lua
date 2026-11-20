@@ -715,10 +715,46 @@ end
 -- name tells the recipient a bot sent it.
 function util:WhisperChat(target, text)
     local msg = "[WeirdLoot] " .. text
+    self:NoteOwnWhisper(target, msg)
     local ctl = ChatThrottleLib
     if ctl then
         ctl:SendChatMessage("ALERT", "WeirdLoot", msg, "WHISPER", nil, target)
     else
         SendChatMessage(msg, "WHISPER", nil, target)
     end
+end
+
+-- The sender's own chat echoes every whisper ("To X: ..."), and a loot master sending dozens of
+-- automated ones loses their chat to it. Only an echo of a whisper the addon itself just sent is hidden:
+-- same recipient, same text, within OWN_WHISPER_TTL of the send (CTL can delay it), and only that one
+-- chat line (its line id, arg11, is shared by every chat frame showing it). Whispers the player types
+-- always show, even with the same text.
+local OWN_WHISPER_TTL = 10
+local ownWhispers = {}
+
+function util:NoteOwnWhisper(target, msg)
+    if target and msg then
+        ownWhispers[#ownWhispers + 1] = { key = self:NormalizeKey(target), msg = msg, at = GetTime() }
+    end
+end
+
+function util:IsOwnWhisperEcho(msg, target, line)
+    local now, key = GetTime(), self:NormalizeKey(target or "")
+    for i = #ownWhispers, 1, -1 do
+        local w = ownWhispers[i]
+        if now - w.at > OWN_WHISPER_TTL then
+            table.remove(ownWhispers, i)
+        elseif w.msg == msg and w.key == key and (w.line == nil or w.line == line) then
+            w.line = line
+            return true
+        end
+    end
+    return false
+end
+
+if ChatFrame_AddMessageEventFilter then
+    ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM",
+        function(_, _, msg, target, _, _, _, _, _, _, _, _, line)
+            return util:IsOwnWhisperEcho(msg, target, line)
+        end)
 end
