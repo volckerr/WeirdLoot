@@ -37,6 +37,8 @@ function addon:InitializePayout()
         end,
         -- route the engine's own trade-flow trace to the same debug log as the core.
         log = function(ev, data) addon:LogCoreEvent(ev, data) end,
+        -- the loot master's chat hides the echo of each automated whisper (util:IsOwnWhisperEcho)
+        onWhisper = function(target, msg) addon.util:NoteOwnWhisper(target, msg) end,
         -- Automated trade management (auto-decline + auto-payout) is an ACTIVE-ML-ONLY action. The
         -- engine bails when this returns false, so a non-ML never declines a trade or auto-places owed
         -- items -- even though InitializePayout runs on every client and the owe ledger persists.

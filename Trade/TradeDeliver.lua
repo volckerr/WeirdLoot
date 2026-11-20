@@ -457,6 +457,7 @@ function TradeDeliver:New(config)
     e._dbg = config.debug or function() end
     e._onDelivered = config.onDelivered or function() end  -- (player, itemId, count) on trade complete
     e._log = config.log or function() end                  -- (ev, data) trade-flow trace (optional)
+    e._onWhisper = config.onWhisper or function() end      -- (target, fullText) for every whisper sent
     e.isActive = config.isActive                           -- optional () -> bool; false => automated trade mgmt OFF
     -- autoCancel is a runtime flag (default OFF), not persisted. When ON, every UNSOLICITED incoming
     -- trade (one a partner opens with us) is declined immediately, regardless of payout state or whether
@@ -554,11 +555,13 @@ function Engine:_trace(what) self._log("td-ev", { id = what }) end
 
 -- ---- throttled comms ----------------------------------------------------
 function Engine:_whisper(target, text)
+    local msg = "[" .. self.name .. "] " .. text
+    self._onWhisper(target, msg)
     local ctl = _G.ChatThrottleLib
     if ctl then
-        ctl:SendChatMessage("ALERT", self.prefix, "[" .. self.name .. "] " .. text, "WHISPER", nil, target)
+        ctl:SendChatMessage("ALERT", self.prefix, msg, "WHISPER", nil, target)
     else
-        SendChatMessage("[" .. self.name .. "] " .. text, "WHISPER", nil, target)
+        SendChatMessage(msg, "WHISPER", nil, target)
     end
 end
 
