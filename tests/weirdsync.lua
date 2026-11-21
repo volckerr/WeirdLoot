@@ -727,6 +727,60 @@ test("a backlogged snapshot from an OLDER generation is rejected (no regression)
         "older-generation snapshot rejected on the generation")
 end)
 
+test("an authority that crashed and relogged with an OLDER epoch is adopted (newer generation)", function()
+    reset()
+    -- A crash loses the ML's unsaved SavedVariables, so it comes back on the epoch it last saved,
+    -- below the one the raid holds. Its new load's generation is newer: that is a restart, not a straggler.
+    local epoch = "7"
+    local ml = makeHost("ML", true)
+    ml.chan.cb.epoch = function() return epoch end
+    ml.chan.nonce = "1000"
+    local rd = makeHost("Raider", false)
+    setLine(ml, "TONIGHT", "lost in the crash")
+    ml.chan:Broadcast(true); deliver()
+    eq(rd.chan.appliedEpoch, "7", "peer on the ML's epoch before the crash")
+
+    epoch = "5"
+    ml.chan.nonce = "2000"
+    ml.chan.rev = 0
+    ml.store = { ["SAVED"] = { "SAVED", "from disk" } }
+    ml.chan:Broadcast(true); deliver()
+    eq(rd.chan.appliedEpoch, "5", "peer adopted the relogged ML's older epoch")
+    check(rd.store["SAVED"] ~= nil and rd.store["TONIGHT"] == nil, "peer mirrors the relogged ML")
+
+    -- the heartbeat alone heals it too (the rebroadcast lost on the wire)
+    reset()
+    epoch = "7"
+    ml = makeHost("ML", true); ml.chan.cb.epoch = function() return epoch end; ml.chan.nonce = "1000"
+    rd = makeHost("Raider", false)
+    setLine(ml, "TONIGHT", "lost in the crash")
+    ml.chan:Broadcast(true); deliver()
+    epoch = "5"; ml.chan.nonce = "2000"; ml.chan.rev = 0
+    ml.store = { ["SAVED"] = { "SAVED", "from disk" } }
+    ml.chan:Broadcast(true); clearWire()
+    ml.chan:Tick(1030); settle()
+    eq(rd.chan.appliedEpoch, "5", "a heartbeat from the relogged ML pulled its snapshot")
+end)
+
+test("an older epoch from a DIFFERENT authority stays rejected, even with a newer generation", function()
+    reset()
+    -- generations are each client's own wall clock: only one authority's loads are comparable
+    local ml = makeHost("ML", true, { epoch = "7" })
+    ml.chan.nonce = "1000"
+    local rd = makeHost("Raider", false)
+    setLine(ml, "CUR", "current")
+    ml.chan:Broadcast(true); deliver()
+
+    local b = makeHost("B", true, { epoch = "5" })
+    b.chan.nonce = "2000"
+    rd.authority = "B"
+    b.store = { ["OLD"] = { "OLD", "stale" } }
+    b.chan:Broadcast(true); deliver()
+    eq(rd.chan.appliedEpoch, "7", "peer kept the newer epoch")
+    check(countEv(rd, "recv-snap-stale", function(d) return d.reason == "epoch" end) >= 1,
+        "older epoch from another authority rejected")
+end)
+
 -- ===========================================================================
 print("")
 print(string.format("=== WeirdSync battery: %d passed, %d failed ===", pass, fail))
