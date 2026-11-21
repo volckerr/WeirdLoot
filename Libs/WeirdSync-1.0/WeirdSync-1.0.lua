@@ -220,8 +220,14 @@ function Channel:OnReceive(sender, value)
         -- defeats the same-epoch rev guard below, because an old long-lived session can sit at a far
         -- HIGHER rev than a fresh one (so rev comparison across epochs is meaningless). Reject a strictly
         -- older epoch outright; equal or newer proceeds. Non-numeric epochs are never compared (accept).
+        -- Except a restart: an authority that crashed loses its unsaved state and comes back on the
+        -- epoch it last saved, below ours, and rejecting it strands us until WE reload. A newer
+        -- generation from the authority we last applied marks that; generations are each client's own
+        -- clock, so they are compared only against that same sender's earlier load.
         local incE, curE = tonumber(inc.epoch), tonumber(self.appliedEpoch)
-        if incE and curE and incE < curE then
+        local ig0, ag0 = tonumber(inc.gen), tonumber(self.appliedGen)
+        local relogged = ig0 and ag0 and ig0 > ag0 and normName(sender) == self.appliedFrom
+        if incE and curE and incE < curE and not relogged then
             self.pendingRequest = nil
             self.cb.log("recv-snap-stale", { reason = "epoch", epoch = inc.epoch, curEpoch = self.appliedEpoch })
             if inc.reqId then self:_send({ "AK", inc.reqId }, "WHISPER", sender, "ALERT") end
@@ -268,6 +274,7 @@ function Channel:OnReceive(sender, value)
         self.lastRev = inc.rev      -- a snapshot re-baselines the revision
         self.appliedEpoch = inc.epoch
         self.appliedGen = inc.gen or self.appliedGen   -- remember the authority's generation for restart detection
+        self.appliedFrom = normName(sender)
         self.pendingRequest = nil   -- our outstanding request (if any) is satisfied
         if genRestart then
             self.cb.log("gen-restart", { epoch = inc.epoch, rev = inc.rev, was = prevGen, now = inc.gen })
@@ -324,7 +331,9 @@ function Channel:OnReceive(sender, value)
         local incE, curE = tonumber(epoch), tonumber(self.appliedEpoch)
         local ig, ag = tonumber(gen), tonumber(self.appliedGen)
         local sameEpoch = (epoch == self.appliedEpoch)
+        -- a relogged authority's older epoch (see the SNAP guard) is behind, not stale
         local staleEpoch = incE and curE and incE < curE
+            and not (ig and ag and ig > ag and normName(sender) == self.appliedFrom)
         local epochChanged = epoch and epoch ~= "" and epoch ~= self.appliedEpoch
         -- Generation ordering (mirrors the SNAP handler). A NEWER generation at the same epoch means the
         -- authority reloaded and its rev is now below ours, so the rev test would read "in-sync" and never
@@ -450,6 +459,7 @@ function WeirdSync:NewChannel(prefix, cb)
     ch.lastRev = nil
     ch.appliedEpoch = nil   -- peer: the epoch of the last applied snapshot (session identity)
     ch.appliedGen = nil     -- peer: the generation (authority process instance) of the last applied snapshot
+    ch.appliedFrom = nil    -- peer: who sent it (generations compare only within one sender)
     ch.outstanding = {}     -- authority: reqId -> { target, attempts, nextAttempt }
     ch.pendingRequest = nil -- peer: { reqId, attempts, nextAttempt }
     ch._pending = {}        -- authority: queued changed lines awaiting Broadcast
